@@ -36,6 +36,7 @@ class Database:
                 is_banned BOOLEAN DEFAULT 0,
                 subscribed BOOLEAN DEFAULT 0,
                 language TEXT DEFAULT 'en',
+                vip_expires_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -50,6 +51,13 @@ class Database:
         # Add language column if missing
         try:
             cursor.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'en'")
+        except sqlite3.OperationalError:
+            # Already exists
+            pass
+        
+        # Add vip_expires_at column if missing
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN vip_expires_at TIMESTAMP")
         except sqlite3.OperationalError:
             # Already exists
             pass
@@ -155,14 +163,23 @@ class Database:
         
         conn.commit()
     
-    def set_vip_status(self, user_id, is_vip):
-        """Set VIP status for user"""
+    def set_vip_status(self, user_id, is_vip, days=30):
+        """Set VIP status for user with expiration date"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        cursor.execute('''
-            UPDATE users SET is_vip = ? WHERE user_id = ?
-        ''', (is_vip, user_id))
+        if is_vip:
+            # Calculate expiration date (30 days from now by default)
+            from datetime import timedelta
+            expiration_date = datetime.now() + timedelta(days=days)
+            cursor.execute('''
+                UPDATE users SET is_vip = ?, vip_expires_at = ? WHERE user_id = ?
+            ''', (is_vip, expiration_date, user_id))
+        else:
+            # Removing VIP status
+            cursor.execute('''
+                UPDATE users SET is_vip = ?, vip_expires_at = NULL WHERE user_id = ?
+            ''', (is_vip, user_id))
         
         conn.commit()
 
@@ -179,6 +196,43 @@ class Database:
         cursor = conn.cursor()
         cursor.execute('UPDATE users SET age = ? WHERE user_id = ?', (age, user_id))
         conn.commit()
+    
+    def get_vip_expiration(self, user_id):
+        """Get VIP expiration date for a user"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT vip_expires_at FROM users WHERE user_id = ?', (user_id,))
+        row = cursor.fetchone()
+        if row and row['vip_expires_at']:
+            return datetime.fromisoformat(row['vip_expires_at'])
+        return None
+    
+    def get_vip_days_remaining(self, user_id):
+        """Get number of days remaining for VIP subscription"""
+        expiration = self.get_vip_expiration(user_id)
+        if not expiration:
+            return None
+        
+        remaining = expiration - datetime.now()
+        return max(0, remaining.days)
+    
+    def check_and_expire_vips(self):
+        """Check and expire VIP subscriptions that have passed their expiration date"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        now = datetime.now()
+        cursor.execute('''
+            UPDATE users 
+            SET is_vip = 0 
+            WHERE is_vip = 1 
+            AND vip_expires_at IS NOT NULL 
+            AND vip_expires_at < ?
+        ''', (now,))
+        
+        expired_count = cursor.rowcount
+        conn.commit()
+        return expired_count
     
     def ban_user(self, user_id):
         """Ban a user"""

@@ -227,6 +227,23 @@ TRANSLATIONS = {
         "ru": "🚫 Пожалуйста, будьте вежливы в общении.",
         "hy": "🚫 Խնդրում եմ զրույցը պահեք հարգալից:",
     },
+    
+    # VIP expiration (for future multilingual VIP messages)
+    "vip_expires_in": {
+        "en": "⏰ Your VIP expires in {days} days",
+        "ru": "⏰ Ваш VIP истекает через {days} дней",
+        "hy": "⏰ Ձեր VIP-ը կլրանա {days} օրից",
+    },
+    "vip_expired": {
+        "en": "⚠️ Your VIP subscription has expired!",
+        "ru": "⚠️ Ваша VIP подписка истекла!",
+        "hy": "⚠️ Ձեր VIP բաժանորդագրությունը լրացել է!",
+    },
+    "vip_lifetime": {
+        "en": "👑 You have lifetime VIP status!",
+        "ru": "👑 У вас пожизненный VIP статус!",
+        "hy": "👑 Դուք ունեք մշտական VIP կարգավիճակ!",
+    },
 }
 
 def get_text(key: str, lang: str = "en", **kwargs) -> str:

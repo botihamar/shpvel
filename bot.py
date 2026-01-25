@@ -733,6 +733,13 @@ class AnonymousChatBot:
             "♂️" if user["gender"] == "male" else "♀️" if user["gender"] == "female" else "⚧️"
         )
         vip_status = "👑 VIP Member" if user["is_vip"] else "Regular User"
+        
+        # Add VIP expiration info if user is VIP
+        vip_info = vip_status
+        if user["is_vip"]:
+            days_remaining = db.get_vip_days_remaining(user_id)
+            if days_remaining is not None:
+                vip_info = f"👑 VIP Member ({days_remaining} days remaining)"
 
         ratings = db.get_user_ratings(user_id)
 
@@ -740,7 +747,7 @@ class AnonymousChatBot:
             f"👤 Your Profile\n\n"
             f"{gender_emoji} Gender: {user['gender'].capitalize()}\n"
             f"🎂 Age: {user['age']}\n"
-            f"✨ Status: {vip_status}\n\n"
+            f"✨ Status: {vip_info}\n\n"
             f"📊 Ratings Received:\n"
             f"👍 Good: {ratings['good']}\n"
             f"👎 Bad: {ratings['bad']}\n"
@@ -837,13 +844,49 @@ class AnonymousChatBot:
         user = db.get_user(user_id)
         
         if user and user['is_vip']:
-            await update.message.reply_text(
-                "👑 You already have VIP status!\n\n"
-                "VIP Benefits:\n"
-                "• See your partner's age and gender\n"
-                "• Priority matching\n"
-                "• Special VIP badge"
-            )
+            days_remaining = db.get_vip_days_remaining(user_id)
+            if days_remaining is not None:
+                if days_remaining > 0:
+                    # Active VIP with days remaining
+                    keyboard = [
+                        [InlineKeyboardButton(f"🔄 Renew VIP for {VIP_PRICE_STARS} Stars", callback_data="buy_vip")]
+                    ]
+                    await update.message.reply_text(
+                        f"👑 You are a VIP Member!\n\n"
+                        f"⏰ Your VIP expires in {days_remaining} days\n\n"
+                        "VIP Benefits:\n"
+                        "• Choose partner gender\n"
+                        "• See partner's age and gender\n"
+                        "• Priority matching\n"
+                        "• Special VIP badge\n\n"
+                        f"💡 You can renew your subscription anytime!",
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                else:
+                    # VIP expired
+                    keyboard = [
+                        [InlineKeyboardButton(f"⭐ Buy VIP for {VIP_PRICE_STARS} Stars", callback_data="buy_vip")]
+                    ]
+                    await update.message.reply_text(
+                        "⚠️ Your VIP subscription has expired!\n\n"
+                        "Renew now to get back:\n"
+                        "• Choose partner gender\n"
+                        "• See partner's age and gender\n"
+                        "• Priority matching\n"
+                        "• Special VIP badge\n\n"
+                        f"💰 Price: {VIP_PRICE_STARS} Telegram Stars (monthly)",
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+            else:
+                # Old VIP user without expiration (grandfathered)
+                await update.message.reply_text(
+                    "👑 You have lifetime VIP status!\n\n"
+                    "VIP Benefits:\n"
+                    "• Choose partner gender\n"
+                    "• See partner's age and gender\n"
+                    "• Priority matching\n"
+                    "• Special VIP badge"
+                )
             return
         
         keyboard = [
@@ -852,11 +895,13 @@ class AnonymousChatBot:
         
         await update.message.reply_text(
             "👑 VIP Membership Benefits:\n\n"
+            "✅ Choose your partner's gender before matching\n"
             "✅ See your partner's age and gender during chats\n"
             "✅ Priority matching in the queue\n"
             "✅ Special VIP badge in your profile\n"
             "✅ Support the bot development\n\n"
-            f"💰 Price: {VIP_PRICE_STARS} Telegram Stars\n\n"
+            f"💰 Price: {VIP_PRICE_STARS} Telegram Stars (monthly)\n"
+            "🔄 Automatically renews every 30 days\n\n"
             "Upgrade now to enhance your anonymous chat experience!",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
@@ -888,13 +933,18 @@ class AnonymousChatBot:
         """Handle successful payment"""
         user_id = update.effective_user.id
         
-        # Grant VIP status
-        db.set_vip_status(user_id, True)
+        # Grant VIP status for 30 days
+        db.set_vip_status(user_id, True, days=30)
         
         await update.message.reply_text(
             "🎉 Congratulations! You are now a VIP member!\n\n"
-            "You can now see your partner's age and gender during chats.\n\n"
-            "Use /search to start chatting with VIP benefits!"
+            "✨ Your VIP subscription is active for 30 days\n\n"
+            "VIP Benefits:\n"
+            "• Choose your partner's gender\n"
+            "• See partner's age and gender\n"
+            "• Priority matching\n"
+            "• Special VIP badge\n\n"
+            "💡 Use /vip to check your subscription status anytime!"
         )
     
     async def rules(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1201,6 +1251,16 @@ def main():
     # Create application
     application = Application.builder().token(BOT_TOKEN).build()
     
+    # Background task to check VIP expirations
+    async def check_vip_expirations(context: ContextTypes.DEFAULT_TYPE):
+        """Check and expire VIP subscriptions daily"""
+        try:
+            expired_count = db.check_and_expire_vips()
+            if expired_count > 0:
+                logger.info(f"Expired {expired_count} VIP subscriptions")
+        except Exception as e:
+            logger.error(f"Error checking VIP expirations: {e}")
+    
     # Set bot commands (menu in Telegram UI)
     async def post_init(app: Application):
         await app.bot.set_my_commands([
@@ -1214,6 +1274,10 @@ def main():
             BotCommand("rules", "📜 View chat rules"),
             BotCommand("help", "🆘 Show help"),
         ])
+        
+        # Schedule daily VIP expiration check (runs every 24 hours)
+        job_queue = app.job_queue
+        job_queue.run_repeating(check_vip_expirations, interval=86400, first=10)  # 86400 seconds = 24 hours
     
     application.post_init = post_init
     
