@@ -47,6 +47,27 @@ class AnonymousChatBot:
     def __init__(self):
         self.active_chats = {}  # {user_id: partner_id}
         self.search_queue = []  # Users looking for a chat
+
+    def _format_partner_ratings_line(self, target_user_id: int, lang: str = 'en') -> str:
+        """VIP-only: return a one-line summary of partner ratings."""
+        ratings = db.get_user_ratings(target_user_id)
+
+        good = int(ratings.get('good') or 0)
+        bad = int(ratings.get('bad') or 0)
+        scam = int(ratings.get('scam') or 0)
+        total = good + bad + scam
+
+        if total == 0:
+            return get_text('vip_partner_ratings_none', lang)
+
+        return get_text(
+            'vip_partner_ratings_line',
+            lang,
+            good=good,
+            bad=bad,
+            scam=scam,
+            total=total,
+        )
     
     def _get_user_lang(self, user_id: int) -> str:
         """Get user's preferred language, default to 'en'."""
@@ -108,18 +129,31 @@ class AnonymousChatBot:
         user_id = update.effective_user.id
         username = (update.effective_user.username or None)
 
-        # Check if user needs to subscribe to channels
-        if not await self.check_subscriptions(update, context):
-            return
-
         # Check if user exists in database
         user = db.get_user(user_id)
 
         if not user:
-            # New user - detect language and start registration
-            lang = self._detect_language(update)
-            context.user_data['language'] = lang
+            # New user - check if language was already selected
+            if 'language' not in context.user_data:
+                # Show language selection first (before captcha)
+                keyboard = [
+                    [InlineKeyboardButton("🇬🇧 English", callback_data="lang_select_en")],
+                    [InlineKeyboardButton("🇷🇺 Русский", callback_data="lang_select_ru")],
+                    [InlineKeyboardButton("🇦🇲 Հայերեն", callback_data="lang_select_hy")],
+                ]
+                
+                await update.message.reply_text(
+                    get_text("language_select_start", self._detect_language(update)),
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                )
+                return
             
+            # Language selected, now check subscriptions
+            if not await self.check_subscriptions(update, context):
+                return
+            
+            # Subscription verified, show gender selection
+            lang = context.user_data.get('language', 'en')
             await update.message.reply_text(
                 get_text("welcome_new", lang),
                 reply_markup=InlineKeyboardMarkup([
@@ -128,7 +162,10 @@ class AnonymousChatBot:
                 ]),
             )
         else:
-            # Existing user
+            # Existing user - check subscriptions first
+            if not await self.check_subscriptions(update, context):
+                return
+            
             lang = self._get_user_lang(user_id)
             
             # Persist username for admin tools (/ban /unban /givevip by @username)
@@ -149,6 +186,7 @@ class AnonymousChatBot:
     async def check_subscriptions(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         """Check if user has subscribed to required channels"""
         user_id = update.effective_user.id
+        lang = context.user_data.get('language', 'en')
         
         # Check if already verified
         user = db.get_user(user_id)
@@ -168,12 +206,14 @@ class AnonymousChatBot:
         
         if not_subscribed:
             channel_links = '\n'.join([f"• {ch}" for ch in REQUIRED_CHANNELS])
-            keyboard = [[InlineKeyboardButton("✅ I Subscribed", callback_data="verify_subscription")]]
+
+            keyboard = [[
+                InlineKeyboardButton(get_text("subscription_btn", lang), callback_data="verify_subscription")
+            ]]
             
-            await update.message.reply_text(
-                f"🔒 Please subscribe to our channels to use this bot:\n\n"
-                f"{channel_links}\n\n"
-                f"After subscribing, click the button below:",
+            # Use effective_chat.send_message to work with both messages and callback queries
+            await update.effective_chat.send_message(
+                get_text("subscription_missing", lang, channel_links=channel_links),
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             return False
@@ -190,6 +230,7 @@ class AnonymousChatBot:
         await query.answer()
         
         user_id = query.from_user.id
+        lang = context.user_data.get('language', 'en')
         not_subscribed = []
         
         for channel in REQUIRED_CHANNELS:
@@ -202,24 +243,19 @@ class AnonymousChatBot:
                 not_subscribed.append(channel)
         
         if not_subscribed:
-            await query.edit_message_text(
-                "❗️ You haven't joined all required channels yet.\n"
-                "Please subscribe to all channels and try again."
-            )
+            await query.edit_message_text(get_text("subscription_not_all", lang))
         else:
             db.update_user_subscription(user_id, True)
-            await query.edit_message_text(
-                "✅ Subscription verified! You can now use the bot.\n\n"
-                "Let's complete your registration..."
-            )
+
+            await query.edit_message_text(get_text("subscription_verified", lang))
             
-            # Start registration
+            # Start registration with selected language
             await context.bot.send_message(
                 chat_id=user_id,
-                text="Please select your gender:",
+                text=get_text("welcome_new", lang),
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("♂️ Male", callback_data="gender_male")],
-                    [InlineKeyboardButton("♀️ Female", callback_data="gender_female")],
+                    [InlineKeyboardButton(get_text("gender_male", lang), callback_data="gender_male")],
+                    [InlineKeyboardButton(get_text("gender_female", lang), callback_data="gender_female")],
                 ])
             )
     
@@ -389,10 +425,12 @@ class AnonymousChatBot:
             if user_is_vip:
                 gender_emoji = "♂️" if partner['gender'] == 'male' else "♀️" if partner['gender'] == 'female' else "⚧️"
                 user_message += f"\n\n👑 VIP Info: {gender_emoji} {partner['gender'].capitalize()}, {partner['age']} years old"
+                user_message += "\n" + self._format_partner_ratings_line(partner_id, self._get_user_lang(user_id))
             
             if partner_is_vip:
                 gender_emoji = "♂️" if user['gender'] == 'male' else "♀️" if user['gender'] == 'female' else "⚧️"
                 partner_message += f"\n\n👑 VIP Info: {gender_emoji} {user['gender'].capitalize()}, {user['age']} years old"
+                partner_message += "\n" + self._format_partner_ratings_line(user_id, self._get_user_lang(partner_id))
             
             await msg.reply_text(user_message)
             await context.bot.send_message(partner_id, partner_message)
@@ -620,20 +658,6 @@ class AnonymousChatBot:
                     f"Reported by: {rater_id}"
                 )
             
-            # Auto-ban if too many reports
-            if scam_count >= 3:
-                db.ban_user(target_id)
-                await context.bot.send_message(
-                    target_id,
-                    "🚫 You have been banned due to multiple reports of misconduct."
-                )
-                
-                for admin_id in ADMIN_IDS:
-                    await context.bot.send_message(
-                        admin_id,
-                        f"🚫 User {target_id} has been automatically banned (3+ reports)"
-                    )
-            
             await query.edit_message_text(
                 "⛔ Thank you for your report. Our team will review this case."
             )
@@ -702,6 +726,32 @@ class AnonymousChatBot:
             logger.error(f"Error sending message: {e}")
             await update.message.reply_text(
                 "❗️ Failed to send message. Your partner may have left."
+            )
+
+    async def handle_media(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Relay non-text messages (photos, videos, GIFs, etc.) to chat partner."""
+        user_id = update.effective_user.id
+
+        if user_id not in self.active_chats:
+            await update.effective_message.reply_text(
+                "❗️ You're not in an active chat.\nUse /search to find a partner."
+            )
+            return
+
+        partner_id = self.active_chats[user_id]
+        msg = update.effective_message
+
+        # Copy keeps anonymity (no forward header) and preserves caption + formatting.
+        try:
+            await context.bot.copy_message(
+                chat_id=partner_id,
+                from_chat_id=msg.chat_id,
+                message_id=msg.message_id,
+            )
+        except Exception as e:
+            logger.error(f"Error sending media: {e}")
+            await update.effective_message.reply_text(
+                "❗️ Failed to send media. Your partner may have left."
             )
     
     def contains_link(self, text: str) -> bool:
@@ -1010,8 +1060,36 @@ class AnonymousChatBot:
         await query.answer()
         
         user_id = update.effective_user.id
-        lang_code = query.data.split('_')[1]  # lang_en -> en
+        lang_code = query.data.split('_')[1]  # lang_en -> en or lang_select_en -> select
         
+        # Check if this is initial language selection (new user)
+        if query.data.startswith("lang_select_"):
+            lang_code = query.data.split('_')[2]  # lang_select_en -> en
+            
+            if lang_code not in ("en", "ru", "hy"):
+                lang_code = "en"
+            
+            # Store language in context for new user
+            context.user_data['language'] = lang_code
+            
+            # Delete the language selection message
+            await query.delete_message()
+
+            # After language selection, only enforce channel subscription check
+            if not await self.check_subscriptions(update, context):
+                return
+
+            # Subscription verified, show gender selection
+            await update.effective_chat.send_message(
+                get_text("welcome_new", lang_code),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton(get_text("gender_male", lang_code), callback_data="gender_male")],
+                    [InlineKeyboardButton(get_text("gender_female", lang_code), callback_data="gender_female")],
+                ]),
+            )
+            return
+        
+        # Existing user changing language
         if lang_code not in ("en", "ru", "hy"):
             lang_code = "en"
         
@@ -1074,6 +1152,16 @@ class AnonymousChatBot:
         await handler(update, context)
     
     # Admin commands
+    async def admin_commands(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /commands command (admin only) - show all admin commands."""
+        user_id = update.effective_user.id
+
+        if user_id not in ADMIN_IDS:
+            return
+
+        lang = self._get_user_lang(user_id)
+        await update.message.reply_text(get_text("admin_commands_list", lang))
+
     async def admin_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /stats command (admin only)"""
         user_id = update.effective_user.id
@@ -1104,7 +1192,7 @@ class AnonymousChatBot:
             return
         
         if not context.args:
-            await update.message.reply_text("Usage: /ban <user_id | @username>")
+            await update.message.reply_text(get_text("admin_usage_ban", "en"))
             return
         
         try:
@@ -1135,7 +1223,7 @@ class AnonymousChatBot:
             await update.message.reply_text(f"✅ User {target_id} has been banned.")
             
         except (ValueError, IndexError):
-            await update.message.reply_text("❗️ Invalid target (use numeric id or @username)")
+            await update.message.reply_text(get_text("admin_invalid_target", "en"))
     
     async def admin_unban(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /unban command (admin only)"""
@@ -1145,22 +1233,32 @@ class AnonymousChatBot:
             return
         
         if not context.args:
-            await update.message.reply_text("Usage: /unban <user_id | @username>")
+            await update.message.reply_text(get_text("admin_usage_unban", "en"))
             return
         
         try:
             target_id = self._resolve_target_user_id(context.args[0])
             if target_id is None:
                 await update.message.reply_text(
-                    "❗️ Unknown target. Use numeric id or @username. (User must have started the bot at least once.)"
+                    get_text("admin_unknown_target", "en")
                 )
                 return
             db.unban_user(target_id)
             
-            await update.message.reply_text(f"✅ User {target_id} has been unbanned.")
+            await update.message.reply_text(get_text("admin_unban_done", "en", user_id=target_id))
             
         except (ValueError, IndexError):
-            await update.message.reply_text("❗️ Invalid target (use numeric id or @username)")
+            await update.message.reply_text(get_text("admin_invalid_target", "en"))
+
+    async def admin_unban_all(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /unbanall command (admin only)"""
+        user_id = update.effective_user.id
+
+        if user_id not in ADMIN_IDS:
+            return
+
+        changed = db.unban_all_users()
+        await update.message.reply_text(get_text("admin_unban_all_done", "en", count=changed))
     
     async def admin_give_vip(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /givevip command (admin only)"""
@@ -1170,14 +1268,14 @@ class AnonymousChatBot:
             return
         
         if not context.args:
-            await update.message.reply_text("Usage: /givevip <user_id | @username>")
+            await update.message.reply_text(get_text("admin_usage_givevip", "en"))
             return
         
         try:
             target_id = self._resolve_target_user_id(context.args[0])
             if target_id is None:
                 await update.message.reply_text(
-                    "❗️ Unknown target. Use numeric id or @username. (User must have started the bot at least once.)"
+                    get_text("admin_unknown_target", "en")
                 )
                 return
 
@@ -1191,7 +1289,7 @@ class AnonymousChatBot:
             await update.message.reply_text(f"✅ VIP status granted to user {target_id}")
             
         except (ValueError, IndexError):
-            await update.message.reply_text("❗️ Invalid target (use numeric id or @username)")
+            await update.message.reply_text(get_text("admin_invalid_target", "en"))
     
     async def admin_reports(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /reports command (admin only)"""
@@ -1203,7 +1301,7 @@ class AnonymousChatBot:
         reports = db.get_recent_reports()
         
         if not reports:
-            await update.message.reply_text("No recent reports.")
+            await update.message.reply_text(get_text("admin_no_reports", "en"))
             return
         
         reports_text = "⛔ Recent Reports:\n\n"
@@ -1220,7 +1318,7 @@ class AnonymousChatBot:
             return
         
         if not context.args:
-            await update.message.reply_text("Usage: /broadcast <message>")
+            await update.message.reply_text(get_text("admin_usage_broadcast", "en"))
             return
         
         message = ' '.join(context.args)
@@ -1294,9 +1392,11 @@ def main():
     application.add_handler(CommandHandler("language", bot.language_command))
     
     # Admin commands
+    application.add_handler(CommandHandler("commands", bot.admin_commands))
     application.add_handler(CommandHandler("stats", bot.admin_stats))
     application.add_handler(CommandHandler("ban", bot.admin_ban))
     application.add_handler(CommandHandler("unban", bot.admin_unban))
+    application.add_handler(CommandHandler("unbanall", bot.admin_unban_all))
     application.add_handler(CommandHandler("givevip", bot.admin_give_vip))
     application.add_handler(CommandHandler("reports", bot.admin_reports))
     application.add_handler(CommandHandler("broadcast", bot.admin_broadcast))
@@ -1331,6 +1431,17 @@ def main():
     
     # Message handler (must be last)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
+
+    # Media handler (photos/videos/GIFs/etc.)
+    application.add_handler(
+        MessageHandler(
+            ~filters.TEXT
+            & ~filters.COMMAND
+            & ~filters.StatusUpdate.ALL
+            & ~filters.UpdateType.EDITED,
+            bot.handle_media,
+        )
+    )
     
     # Start the bot
     logger.info("Bot started!")

@@ -255,6 +255,19 @@ class Database:
         ''', (user_id,))
         
         conn.commit()
+
+    def unban_all_users(self) -> int:
+        """Unban all users.
+
+        Returns:
+            int: number of users updated
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE users SET is_banned = 0 WHERE is_banned = 1')
+        changed = cursor.rowcount
+        conn.commit()
+        return changed
     
     def add_rating(self, rater_id, target_id, rating_type):
         """Add a rating"""
