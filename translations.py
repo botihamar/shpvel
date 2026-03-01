@@ -363,6 +363,200 @@ TRANSLATIONS = {
         "ru": "👑 У вас пожизненный VIP статус!",
         "hy": "👑 Դուք ունեք մշտական VIP կարգավիճակ!",
     },
+    
+    # Atomic matchmaking messages
+    "register_first": {
+        "en": "❗️ Please complete registration first by sending /start",
+        "ru": "❗️ Пожалуйста, сначала завершите регистрацию, отправив /start",
+        "hy": "❗️ Խնդրում եմ նախ ավարտեք գրանցումը՝ ուղարկելով /start",
+    },
+    "banned": {
+        "en": "🚫 You have been banned from using this bot due to violations.",
+        "ru": "🚫 Вы забанены за нарушения.",
+        "hy": "🚫 Դուք արգելափակված եք խախտումների համար։",
+    },
+    "already_in_chat": {
+        "en": "❗️ You're already in a chat. Use /stop to end it first.",
+        "ru": "❗️ Вы уже в чате. Используйте /stop чтобы завершить его.",
+        "hy": "❗️ Դուք արդեն զրույցում եք։ Օգտագործեք /stop՝ ավարտելու համար։",
+    },
+    "already_searching": {
+        "en": "⏳ You're already in the search queue. Please wait...",
+        "ru": "⏳ Вы уже в очереди поиска. Пожалуйста, подождите...",
+        "hy": "⏳ Դուք արդեն որոնման հերթում եք։ Խնդրում եմ սպասեք...",
+    },
+    "vip_choose_gender": {
+        "en": "👑 VIP Search\n\nChoose who you want to match:",
+        "ru": "👑 VIP Поиск\n\nВыберите, с кем хотите найти собеседника:",
+        "hy": "👑 VIP Որոնում\n\nԸնտրեք ում հետ ցանկանում եք զրուցել:",
+    },
+    "match_found": {
+        "en": "🔹 You are now connected to a partner! Say hi!",
+        "ru": "🔹 Вы подключены к собеседнику! Поздоровайтесь!",
+        "hy": "🔹 Դուք կապված եք զրուցակցի հետ! Ողջունեք!",
+    },
+    "searching": {
+        "en": "🔍 Searching for a chat partner...\nYou'll be notified when someone is found.",
+        "ru": "🔍 Ищем собеседника...\nМы уведомим вас, когда кто-то найдется.",
+        "hy": "🔍 Որոնում ենք զրուցակից...\nԿտեղեկացնենք, երբ գտնենք։",
+    },
+    "not_in_chat_or_search": {
+        "en": "❗️ You're not in an active chat or search.",
+        "ru": "❗️ Вы не в активном чате и не в поиске.",
+        "hy": "❗️ Դուք ակտիվ զրույցում կամ որոնման մեջ չեք։",
+    },
+    "search_cancelled": {
+        "en": "🛑 Search cancelled.\nUse /search when you want to find a partner again.",
+        "ru": "🛑 Поиск отменён.\nИспользуйте /search когда захотите найти собеседника снова.",
+        "hy": "🛑 Որոնումը չեղարկվեց։\nՕգտագործեք /search երբ կրկին ցանկանաք գտնել զրուցակից։",
+    },
+    "partner_left": {
+        "en": "🔸 Your partner has left the chat.\n\nUse /search to find a new partner.",
+        "ru": "🔸 Ваш собеседник покинул чат.\n\nИспользуйте /search чтобы найти нового.",
+        "hy": "🔸 Ձեր զրուցակիցը լքեց զրույցը։\n\nՕգտագործեք /search նոր զրուցակից գտնելու համար։",
+    },
+    "not_in_chat": {
+        "en": "❗️ You're not in an active chat. Use /search to find a partner first.",
+        "ru": "❗️ Вы не в активном чате. Используйте /search чтобы найти собеседника.",
+        "hy": "❗️ Դուք ակտիվ զրույցում չեք։ Օգտագործեք /search գտնելու համար։",
+    },
+    "no_username": {
+        "en": "❗️ You don't have a Telegram username set.\n\nSet one in Telegram Settings → Username, then try /sharelink again.",
+        "ru": "❗️ У вас не установлен Telegram username.\n\nУстановите его в Настройках Telegram → Имя пользователя, затем попробуйте /sharelink снова.",
+        "hy": "❗️ Դուք չունեք Telegram օգտանուն։\n\nԿարգավորեք Telegram Կարգավորումներ → Օգտանուն, ապա փորձեք /sharelink կրկին։",
+    },
+    "already_in_state": {
+        "en": "❗️ You're already {state}. Please wait...",
+        "ru": "❗️ Вы уже {state}. Пожалуйста, подождите...",
+        "hy": "❗️ Դուք արդեն {state}։ Խնդրում եմ սպասեք...",
+    },
+
+    "gender_invalid": {
+        "en": "❗️ Please select one of the available options: Male or Female.",
+        "ru": "❗️ Пожалуйста, выберите один из доступных вариантов: Мужской или Женский.",
+        "hy": "❗️ Խնդրում եմ ընտրեք հասանելի տարբերակներից մեկը՝ Արական կամ Իգական։",
+    },
+
+    "vip_search_preference_set": {
+        "en": "👑 VIP Search preference: {label}\n\n🔍 Starting search...",
+        "ru": "👑 VIP Поиск: предпочтение — {label}\n\n🔍 Начинаем поиск...",
+        "hy": "👑 VIP Որոնում՝ նախընտրությունը՝ {label}\n\n🔍 Սկսում ենք որոնումը...",
+    },
+
+    "vip_label_boy": {
+        "en": "Boy",
+        "ru": "Парень",
+        "hy": "Տղա",
+    },
+    "vip_label_girl": {
+        "en": "Girl",
+        "ru": "Девушка",
+        "hy": "Աղջիկ",
+    },
+    "vip_label_random": {
+        "en": "Random",
+        "ru": "Случайно",
+        "hy": "Պատահական",
+    },
+
+    "share_cancelled": {
+        "en": "❌ Share cancelled.",
+        "ru": "❌ Отправка отменена.",
+        "hy": "❌ Ուղարկումը չեղարկվեց։",
+    },
+    "sharelink_shared": {
+        "en": "✅ Your Telegram link was shared with your partner.",
+        "ru": "✅ Ваша ссылка Telegram отправлена собеседнику.",
+        "hy": "✅ Ձեր Telegram հղումը ուղարկվեց զրուցակցին։",
+    },
+    "invalid_gender_choice": {
+        "en": "❗️ Invalid gender choice.",
+        "ru": "❗️ Неверный выбор пола.",
+        "hy": "❗️ Սեռի ընտրությունը սխալ է։",
+    },
+    "age_invalid_number_simple": {
+        "en": "❗️ Please enter a valid number (12–99):",
+        "ru": "❗️ Пожалуйста, введите правильное число (12–99):",
+        "hy": "❗️ Խնդրում եմ մուտքագրեք ճիշտ թիվ (12–99):",
+    },
+
+    "thanks_report": {
+        "en": "⛔ Thank you for your report. Our team will review this case.",
+        "ru": "⛔ Спасибо за вашу жалобу. Наша команда рассмотрит этот случай.",
+        "hy": "⛔ Շնորհակալություն ձեր բողոքի համար։ Մեր թիմը կուսումնասիրի այս դեպքը:",
+    },
+    "thanks_rating_with_type": {
+        "en": "Thank you for rating your partner! ({rating_type})",
+        "ru": "Спасибо за оценку собеседника! ({rating_type})",
+        "hy": "Շնորհակալություն զրուցակցին գնահատելու համար։ ({rating_type})",
+    },
+    "age_invalid_range": {
+        "en": "❗️ Age must be between 12 and 99. Please enter your age again:",
+        "ru": "❗️ Возраст должен быть от 12 до 99. Пожалуйста, введите возраст снова:",
+        "hy": "❗️ Տարիքը պետք է լինի 12-ից 99։ Խնդրում եմ մուտքագրեք տարիքը կրկին:",
+    },
+    "age_updated": {
+        "en": "✅ Age updated!\n\nSend /profile to view your updated profile.",
+        "ru": "✅ Возраст обновлён!\n\nОтправьте /profile чтобы посмотреть профиль.",
+        "hy": "✅ Տարիքը թարմացվեց։\n\nՈւղարկեք /profile՝ տեսնելու համար ձեր պրոֆիլը։",
+    },
+    "no_links": {
+        "en": "🚫 Links are not allowed in this chat.",
+        "ru": "🚫 Ссылки запрещены в этом чате.",
+        "hy": "🚫 Հղումները թույլատրված չեն այս զրույցում:",
+    },
+    "send_failed": {
+        "en": "❗️ Failed to send message. Your partner may have left.",
+        "ru": "❗️ Не удалось отправить сообщение. Возможно, собеседник вышел.",
+        "hy": "❗️ Չհաջողվեց ուղարկել հաղորդագրությունը։ Հնարավոր է՝ զրուցակիցը դուրս է եկել։",
+    },
+
+    "sharelink_prompt": {
+        "en": "🔗 Share your Telegram link with your partner?\n\nThis will send: https://t.me/{username}",
+        "ru": "🔗 Поделиться вашей Telegram ссылкой с собеседником?\n\nБудет отправлено: https://t.me/{username}",
+        "hy": "🔗 Կիսվել ձեր Telegram հղումով զրուցակցի հետ՞\n\nԿուղարկվի՝ https://t.me/{username}",
+    },
+    "sharelink_btn_share": {
+        "en": "✅ Share",
+        "ru": "✅ Отправить",
+        "hy": "✅ Ուղարկել",
+    },
+    "sharelink_btn_cancel": {
+        "en": "❌ Cancel",
+        "ru": "❌ Отмена",
+        "hy": "❌ Չեղարկել",
+    },
+
+    "edit_profile_title": {
+        "en": "✏️ Edit Profile\n\nChoose what you want to change:",
+        "ru": "✏️ Редактировать профиль\n\nВыберите, что хотите изменить:",
+        "hy": "✏️ Խմբագրել պրոֆիլը\n\nԸնտրեք՝ ինչն եք ուզում փոխել:",
+    },
+    "edit_profile_btn_edit_age": {
+        "en": "🎂 Edit Age",
+        "ru": "🎂 Изменить возраст",
+        "hy": "🎂 Փոխել տարիքը",
+    },
+    "edit_profile_btn_back": {
+        "en": "⬅️ Back",
+        "ru": "⬅️ Назад",
+        "hy": "⬅️ Հետ",
+    },
+    "gender_updated": {
+        "en": "✅ Gender updated to: {gender}\n\nSend /profile to view your updated profile.",
+        "ru": "✅ Пол изменён на: {gender}\n\nОтправьте /profile чтобы посмотреть профиль.",
+        "hy": "✅ Սեռը փոխվեց՝ {gender}\n\nՈւղարկեք /profile՝ տեսնելու համար ձեր պրոֆիլը։",
+    },
+    "edit_profile_enter_age": {
+        "en": "🎂 Enter your new age (12–99):\n\nSend a number as a message.",
+        "ru": "🎂 Введите ваш новый возраст (12–99):\n\nОтправьте число сообщением.",
+        "hy": "🎂 Մուտքագրեք ձեր նոր տարիքը (12–99):\n\nՈւղարկեք թիվը հաղորդագրությամբ։",
+    },
+    "not_in_chat": {
+        "en": "❗️ You're not in an active chat. Use /search to find a partner first.",
+        "ru": "❗️ Вы не в активном чате. Используйте /search чтобы найти собеседника.",
+        "hy": "❗️ Դուք ակտիվ զրույցում չեք։ Օգտագործեք /search գտնելու համար։",
+    },
 }
 
 def get_text(key: str, lang: str = "en", **kwargs) -> str:

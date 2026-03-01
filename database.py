@@ -25,7 +25,7 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        # Users table
+        # Users table with state machine
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -37,7 +37,12 @@ class Database:
                 subscribed BOOLEAN DEFAULT 0,
                 language TEXT DEFAULT 'en',
                 vip_expires_at TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                state TEXT DEFAULT 'IDLE' CHECK(state IN ('IDLE', 'SEARCHING', 'RESERVED', 'CHATTING', 'RATING')),
+                search_target_gender TEXT CHECK(search_target_gender IN ('male', 'female', 'any') OR search_target_gender IS NULL),
+                current_chat_id INTEGER,
+                reserved_at TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
 
@@ -61,6 +66,105 @@ class Database:
         except sqlite3.OperationalError:
             # Already exists
             pass
+        
+        # Add state machine columns if missing
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN state TEXT DEFAULT 'IDLE' CHECK(state IN ('IDLE', 'SEARCHING', 'RESERVED', 'CHATTING', 'RATING'))")
+        except sqlite3.OperationalError:
+            pass
+        
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN search_target_gender TEXT CHECK(search_target_gender IN ('male', 'female', 'any') OR search_target_gender IS NULL)")
+        except sqlite3.OperationalError:
+            pass
+        
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN current_chat_id INTEGER")
+        except sqlite3.OperationalError:
+            pass
+        
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN reserved_at TIMESTAMP")
+        except sqlite3.OperationalError:
+            pass
+        
+        # Add updated_at column (SQLite doesn't support DEFAULT CURRENT_TIMESTAMP in ALTER TABLE)
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN updated_at TIMESTAMP")
+            # Populate with current timestamp for all existing rows
+            cursor.execute("UPDATE users SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL")
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
+        
+        # Create search queue table for atomic operations
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS search_queue (
+                user_id INTEGER PRIMARY KEY,
+                target_gender TEXT NOT NULL CHECK(target_gender IN ('male', 'female', 'any')),
+                is_vip BOOLEAN DEFAULT 0,
+                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        ''')
+        
+        # Create chat sessions table for atomic matching
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                chat_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user1_id INTEGER NOT NULL,
+                user2_id INTEGER NOT NULL,
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                ended_at TIMESTAMP,
+                user1_rated BOOLEAN DEFAULT 0,
+                user2_rated BOOLEAN DEFAULT 0,
+                FOREIGN KEY (user1_id) REFERENCES users(user_id),
+                FOREIGN KEY (user2_id) REFERENCES users(user_id),
+                CHECK (user1_id != user2_id)
+            )
+        ''')
+
+        # Migration: older DBs had uniqueness constraints that block valid future chats.
+        # - UNIQUE on user1_id/user2_id individually prevents a user from ever chatting again.
+        # - UNIQUE(user1_id, user2_id) prevents the same pair from chatting again later.
+        # We rebuild table without these UNIQUE constraints and rely on state machine + ended_at checks.
+        try:
+            cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='chat_sessions'")
+            row = cursor.fetchone()
+            create_sql = (row['sql'] if row else '') or ''
+            if (
+                'user1_id INTEGER NOT NULL UNIQUE' in create_sql
+                or 'user2_id INTEGER NOT NULL UNIQUE' in create_sql
+                or 'UNIQUE(user1_id, user2_id)' in create_sql
+            ):
+                cursor.execute('ALTER TABLE chat_sessions RENAME TO chat_sessions_old')
+                cursor.execute('''
+                    CREATE TABLE chat_sessions (
+                        chat_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user1_id INTEGER NOT NULL,
+                        user2_id INTEGER NOT NULL,
+                        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        ended_at TIMESTAMP,
+                        user1_rated BOOLEAN DEFAULT 0,
+                        user2_rated BOOLEAN DEFAULT 0,
+                        FOREIGN KEY (user1_id) REFERENCES users(user_id),
+                        FOREIGN KEY (user2_id) REFERENCES users(user_id),
+                        CHECK (user1_id != user2_id)
+                    )
+                ''')
+                cursor.execute('''
+                    INSERT INTO chat_sessions (chat_id, user1_id, user2_id, started_at, ended_at, user1_rated, user2_rated)
+                    SELECT chat_id, user1_id, user2_id, started_at, ended_at, user1_rated, user2_rated
+                    FROM chat_sessions_old
+                ''')
+                cursor.execute('DROP TABLE chat_sessions_old')
+        except Exception:
+            # Don't block startup on migration edge-cases
+            pass
+
+        # Helpful indexes for lookups of active chats by either side
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_sessions_user1 ON chat_sessions(user1_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_sessions_user2 ON chat_sessions(user2_id)')
         
         # Ratings table
         cursor.execute('''
@@ -332,6 +436,18 @@ class Database:
         cursor.execute('SELECT COUNT(*) as count FROM users WHERE is_banned = 1')
         banned_users = cursor.fetchone()['count']
         
+        # Active chats
+        cursor.execute('''
+            SELECT COUNT(*) as count 
+            FROM users 
+            WHERE state = 'CHATTING' AND current_chat_id IS NOT NULL
+        ''')
+        active_chats = cursor.fetchone()['count'] // 2  # Divide by 2 since both users are counted
+        
+        # Users in queue
+        cursor.execute('SELECT COUNT(*) as count FROM search_queue')
+        in_queue = cursor.fetchone()['count']
+        
         # Total ratings
         cursor.execute('SELECT COUNT(*) as count FROM ratings')
         total_ratings = cursor.fetchone()['count']
@@ -344,6 +460,8 @@ class Database:
             'total_users': total_users,
             'vip_users': vip_users,
             'banned_users': banned_users,
+            'active_chats': active_chats,
+            'in_queue': in_queue,
             'total_ratings': total_ratings,
             'total_reports': total_reports
         }
@@ -397,3 +515,445 @@ class Database:
         ''', (chat_id,))
         
         conn.commit()
+
+    # ==================== ATOMIC MATCHMAKING METHODS ====================
+    
+    def get_user_state(self, user_id):
+        """Get user's current state"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT state, current_chat_id FROM users WHERE user_id = ?', (user_id,))
+        row = cursor.fetchone()
+        if row:
+            return {'state': row['state'], 'chat_id': row['current_chat_id']}
+        return None
+    
+    def atomic_join_queue(self, user_id, target_gender='any'):
+        """
+        Atomically join search queue.
+        Returns (success: bool, message: str)
+        Enforces: user must be in IDLE state, no duplicate queue entries
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Start transaction
+            conn.execute('BEGIN IMMEDIATE')
+            
+            # Check user state
+            cursor.execute('SELECT state, is_banned FROM users WHERE user_id = ?', (user_id,))
+            row = cursor.fetchone()
+            if not row:
+                conn.rollback()
+                return (False, "User not registered")
+            
+            if row['is_banned']:
+                conn.rollback()
+                return (False, "User is banned")
+            
+            if row['state'] != 'IDLE':
+                conn.rollback()
+                return (False, f"Already {row['state'].lower()}")
+            
+            # Insert into queue (UNIQUE constraint prevents duplicates)
+            cursor.execute('''
+                INSERT INTO search_queue (user_id, target_gender, is_vip)
+                SELECT ?, ?, is_vip FROM users WHERE user_id = ?
+            ''', (user_id, target_gender, user_id))
+            
+            # Update user state to SEARCHING
+            cursor.execute('''
+                UPDATE users 
+                SET state = 'SEARCHING', search_target_gender = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = ?
+            ''', (target_gender, user_id))
+            
+            conn.commit()
+            return (True, "Joined queue")
+            
+        except sqlite3.IntegrityError as e:
+            conn.rollback()
+            return (False, f"Already in queue: {str(e)}")
+        except Exception as e:
+            conn.rollback()
+            return (False, f"Error: {str(e)}")
+    
+    def atomic_match(self, searcher_id, target_gender='any'):
+        """
+        Atomically find and match with a partner.
+        Uses proper locking to prevent race conditions.
+        
+        Returns:
+            (success: bool, partner_id: int | None, message: str)
+        
+        Algorithm:
+        1. Find compatible candidate in queue (not self, matching gender filter)
+        2. Lock candidate's row (prevents other matchers from taking same person)
+        3. Create chat session
+        4. Update both users to CHATTING state
+        5. Remove both from queue
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            conn.execute('BEGIN IMMEDIATE')
+            
+            # Get searcher info
+            cursor.execute('SELECT gender, is_vip FROM users WHERE user_id = ?', (searcher_id,))
+            searcher_row = cursor.fetchone()
+            if not searcher_row:
+                conn.rollback()
+                return (False, None, "Searcher not found")
+            
+            searcher_is_vip = searcher_row['is_vip']
+            
+            # Build filter query.
+            # We must respect BOTH sides:
+            # - searcher constraint: candidate.gender must match searcher target_gender (if specified)
+            # - candidate constraint: searcher.gender must match candidate target_gender (if specified)
+            # This guarantees that if user asked for `female` and there is no suitable female,
+            # we simply return "No matching candidates" and the caller keeps/joins SEARCHING.
+            gender_filter = ""
+            mutual_filter = ""
+            params = [searcher_id]
+
+            if target_gender in ('male', 'female'):
+                gender_filter = " AND u.gender = ?"
+                params.append(target_gender)
+
+            # Candidate's preference must accept the searcher's gender.
+            # Allow q.target_gender='any'. Otherwise require exact match.
+            mutual_filter = " AND (q.target_gender = 'any' OR q.target_gender = ?)"
+            params.append(searcher_row['gender'])
+            
+            # Find candidate with row-level locking
+            # Note: SQLite doesn't have SELECT FOR UPDATE, but BEGIN IMMEDIATE
+            # gives us exclusive write lock on the entire database
+            cursor.execute(f'''
+                SELECT q.user_id, u.gender, u.age, u.is_vip
+                FROM search_queue q
+                JOIN users u ON q.user_id = u.user_id
+                WHERE q.user_id != ?
+                  AND u.state = 'SEARCHING'
+                  AND u.is_banned = 0
+                  {gender_filter}
+                  {mutual_filter}
+                ORDER BY q.is_vip DESC, q.joined_at ASC
+                LIMIT 1
+            ''', params)
+            
+            candidate_row = cursor.fetchone()
+            if not candidate_row:
+                conn.rollback()
+                return (False, None, "No matching candidates")
+            
+            partner_id = candidate_row['user_id']
+            
+            # CRITICAL: Double-check partner is still SEARCHING (not already matched)
+            cursor.execute('SELECT state FROM users WHERE user_id = ?', (partner_id,))
+            check_row = cursor.fetchone()
+            if not check_row or check_row['state'] != 'SEARCHING':
+                conn.rollback()
+                return (False, None, "Candidate no longer available")
+            
+            # Create chat session
+            # Guard: ensure neither side currently has an active chat session.
+            cursor.execute('''
+                SELECT chat_id FROM chat_sessions
+                WHERE ended_at IS NULL AND (user1_id = ? OR user2_id = ? OR user1_id = ? OR user2_id = ?)
+                LIMIT 1
+            ''', (searcher_id, searcher_id, partner_id, partner_id))
+            if cursor.fetchone():
+                conn.rollback()
+                return (False, None, 'Candidate no longer available')
+
+            cursor.execute('''
+                INSERT INTO chat_sessions (user1_id, user2_id, started_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+            ''', (searcher_id, partner_id))
+            
+            chat_id = cursor.lastrowid
+            
+            # Update both users to CHATTING
+            cursor.execute('''
+                UPDATE users
+                SET state = 'CHATTING', current_chat_id = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id IN (?, ?)
+            ''', (chat_id, searcher_id, partner_id))
+            
+            # Remove both from queue
+            cursor.execute('DELETE FROM search_queue WHERE user_id IN (?, ?)', (searcher_id, partner_id))
+            
+            # Log to chat history
+            cursor.execute('''
+                INSERT INTO chat_history (user1_id, user2_id, started_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+            ''', (searcher_id, partner_id))
+            
+            conn.commit()
+            return (True, partner_id, f"Matched! Chat ID: {chat_id}")
+            
+        except sqlite3.IntegrityError as e:
+            conn.rollback()
+            return (False, None, f"Match conflict: {str(e)}")
+        except Exception as e:
+            conn.rollback()
+            return (False, None, f"Error: {str(e)}")
+    
+    def atomic_leave_queue(self, user_id):
+        """
+        Atomically leave search queue.
+        Returns (success: bool, message: str)
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            conn.execute('BEGIN IMMEDIATE')
+            
+            # Remove from queue
+            cursor.execute('DELETE FROM search_queue WHERE user_id = ?', (user_id,))
+            
+            # Update state to IDLE
+            cursor.execute('''
+                UPDATE users
+                SET state = 'IDLE', search_target_gender = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = ? AND state = 'SEARCHING'
+            ''', (user_id,))
+            
+            conn.commit()
+            return (True, "Left queue")
+            
+        except Exception as e:
+            conn.rollback()
+            return (False, f"Error: {str(e)}")
+    
+    def atomic_end_chat(self, user_id):
+        """
+        Atomically end current chat session.
+        Idempotent: safe to call multiple times.
+        Returns (success: bool, partner_id: int | None, message: str)
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            conn.execute('BEGIN IMMEDIATE')
+            
+            # Get current chat info
+            cursor.execute('SELECT state, current_chat_id FROM users WHERE user_id = ?', (user_id,))
+            row = cursor.fetchone()
+            if not row or row['state'] not in ('CHATTING', 'RATING'):
+                conn.rollback()
+                return (False, None, "Not in active chat")
+            
+            chat_id = row['current_chat_id']
+            if not chat_id:
+                conn.rollback()
+                return (False, None, "No chat ID found")
+            
+            # Get partner from chat session
+            cursor.execute('''
+                SELECT user1_id, user2_id FROM chat_sessions WHERE chat_id = ?
+            ''', (chat_id,))
+            chat_row = cursor.fetchone()
+            if not chat_row:
+                conn.rollback()
+                return (False, None, "Chat session not found")
+            
+            partner_id = chat_row['user2_id'] if chat_row['user1_id'] == user_id else chat_row['user1_id']
+            
+            # End chat session
+            cursor.execute('''
+                UPDATE chat_sessions
+                SET ended_at = CURRENT_TIMESTAMP
+                WHERE chat_id = ?
+            ''', (chat_id,))
+            
+            # Update both users to IDLE
+            cursor.execute('''
+                UPDATE users
+                SET state = 'IDLE', current_chat_id = NULL, search_target_gender = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id IN (?, ?)
+            ''', (user_id, partner_id))
+            
+            # Clean up any stale queue entries
+            cursor.execute('DELETE FROM search_queue WHERE user_id IN (?, ?)', (user_id, partner_id))
+            
+            conn.commit()
+            return (True, partner_id, "Chat ended")
+            
+        except Exception as e:
+            conn.rollback()
+            return (False, None, f"Error: {str(e)}")
+    
+    def atomic_next_partner(self, user_id, target_gender='any'):
+        """
+        Atomic /next operation: end current chat + start new search.
+        This is the "super-operation" that prevents /next race conditions.
+        
+        Returns (success: bool, action: str, data: dict)
+        action can be: 'matched', 'searching', 'error'
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            conn.execute('BEGIN IMMEDIATE')
+            
+            # Step 1: End current chat if exists
+            # Important: don't trust `state` alone. If `current_chat_id` points to an active
+            # session (ended_at IS NULL), we must close it, otherwise user can get stuck in
+            # CHATTING forever and search will appear "broken".
+            cursor.execute('SELECT state, current_chat_id FROM users WHERE user_id = ?', (user_id,))
+            row = cursor.fetchone()
+            if not row:
+                conn.rollback()
+                return (False, 'error', {'message': 'User not found'})
+            
+            # Clean up any existing state
+            if row['current_chat_id']:
+                chat_id = row['current_chat_id']
+
+                # Only close if it's actually active.
+                cursor.execute('''
+                    SELECT user1_id, user2_id
+                    FROM chat_sessions
+                    WHERE chat_id = ? AND ended_at IS NULL
+                ''', (chat_id,))
+                chat_row = cursor.fetchone()
+                if chat_row:
+                    partner_id = chat_row['user2_id'] if chat_row['user1_id'] == user_id else chat_row['user1_id']
+
+                    cursor.execute('''
+                        UPDATE chat_sessions
+                        SET ended_at = CURRENT_TIMESTAMP
+                        WHERE chat_id = ? AND ended_at IS NULL
+                    ''', (chat_id,))
+
+                    # Update partner to IDLE (idempotent)
+                    cursor.execute('''
+                        UPDATE users
+                        SET state = 'IDLE', current_chat_id = NULL, search_target_gender = NULL, updated_at = CURRENT_TIMESTAMP
+                        WHERE user_id = ?
+                    ''', (partner_id,))
+
+            # Defensive cleanup: if there are any other active sessions that still reference this user, end them.
+            cursor.execute('''
+                UPDATE chat_sessions
+                SET ended_at = CURRENT_TIMESTAMP
+                WHERE ended_at IS NULL AND (user1_id = ? OR user2_id = ?)
+            ''', (user_id, user_id))
+            
+            # Remove from queue if somehow stuck there
+            cursor.execute('DELETE FROM search_queue WHERE user_id = ?', (user_id,))
+            
+            # Update user to IDLE first
+            cursor.execute('''
+                UPDATE users
+                SET state = 'IDLE', current_chat_id = NULL, search_target_gender = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = ?
+            ''', (user_id,))
+            
+            # Step 2: Try to match immediately
+            cursor.execute('SELECT gender, is_vip FROM users WHERE user_id = ?', (user_id,))
+            searcher_row = cursor.fetchone()
+            
+            gender_filter = ""
+            mutual_filter = ""
+            params = [user_id]
+            if target_gender in ('male', 'female'):
+                gender_filter = " AND u.gender = ?"
+                params.append(target_gender)
+
+            # Candidate's preference must accept the searcher's gender.
+            mutual_filter = " AND (q.target_gender = 'any' OR q.target_gender = ?)"
+            params.append(searcher_row['gender'])
+            
+            cursor.execute(f'''
+                SELECT q.user_id, u.gender, u.age, u.is_vip
+                FROM search_queue q
+                JOIN users u ON q.user_id = u.user_id
+                WHERE q.user_id != ?
+                  AND u.state = 'SEARCHING'
+                  AND u.is_banned = 0
+                  {gender_filter}
+                  {mutual_filter}
+                ORDER BY q.is_vip DESC, q.joined_at ASC
+                LIMIT 1
+            ''', params)
+            
+            candidate_row = cursor.fetchone()
+            
+            if candidate_row:
+                # Found match!
+                partner_id = candidate_row['user_id']
+
+                # Guard: partner might already be in an active chat (stale queue/state). If so, treat as no match.
+                cursor.execute('''
+                    SELECT chat_id FROM chat_sessions
+                    WHERE ended_at IS NULL AND (user1_id = ? OR user2_id = ?)
+                    LIMIT 1
+                ''', (partner_id, partner_id))
+                if cursor.fetchone():
+                    candidate_row = None
+
+            if candidate_row:
+                partner_id = candidate_row['user_id']
+                
+                # Create chat session
+                cursor.execute('''
+                    INSERT INTO chat_sessions (user1_id, user2_id, started_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                ''', (user_id, partner_id))
+                
+                chat_id = cursor.lastrowid
+                
+                # Update both to CHATTING
+                cursor.execute('''
+                    UPDATE users
+                    SET state = 'CHATTING', current_chat_id = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id IN (?, ?)
+                ''', (chat_id, user_id, partner_id))
+                
+                # Remove from queue
+                cursor.execute('DELETE FROM search_queue WHERE user_id IN (?, ?)', (user_id, partner_id))
+                
+                # Log
+                cursor.execute('''
+                    INSERT INTO chat_history (user1_id, user2_id, started_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                ''', (user_id, partner_id))
+                
+                conn.commit()
+                
+                # Get partner info
+                partner_info = {
+                    'user_id': partner_id,
+                    'gender': candidate_row['gender'],
+                    'age': candidate_row['age'],
+                    'is_vip': candidate_row['is_vip']
+                }
+                
+                return (True, 'matched', {'partner': partner_info, 'chat_id': chat_id})
+            else:
+                # No match, join queue
+                cursor.execute('''
+                    INSERT INTO search_queue (user_id, target_gender, is_vip)
+                    SELECT ?, ?, is_vip FROM users WHERE user_id = ?
+                ''', (user_id, target_gender, user_id))
+                
+                cursor.execute('''
+                    UPDATE users
+                    SET state = 'SEARCHING', search_target_gender = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id = ?
+                ''', (target_gender, user_id))
+                
+                conn.commit()
+                return (True, 'searching', {'message': 'Searching for next partner'})
+        
+        except Exception as e:
+            conn.rollback()
+            return (False, 'error', {'message': f'Error: {str(e)}'})

@@ -4,6 +4,7 @@ Main bot file with all handlers and logic
 """
 
 import logging
+from telegram.error import BadRequest, Forbidden
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -45,8 +46,9 @@ db = Database()
 
 class AnonymousChatBot:
     def __init__(self):
-        self.active_chats = {}  # {user_id: partner_id}
-        self.search_queue = []  # Users looking for a chat
+        # REMOVED: self.active_chats and self.search_queue
+        # All state now managed atomically in database
+        pass
 
     def _format_partner_ratings_line(self, target_user_id: int, lang: str = 'en') -> str:
         """VIP-only: return a one-line summary of partner ratings."""
@@ -123,6 +125,27 @@ class AnonymousChatBot:
         if not user_row:
             return None
         return int(user_row['user_id'])
+    
+    def _get_partner_id(self, user_id: int):
+        """
+        Get partner_id from active chat session.
+        Returns None if user is not in CHATTING state.
+        """
+        state_info = db.get_user_state(user_id)
+        if not state_info or state_info['state'] != 'CHATTING' or not state_info['chat_id']:
+            return None
+        
+        # Get partner from chat_sessions table
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT user1_id, user2_id FROM chat_sessions WHERE chat_id = ?
+        ''', (state_info['chat_id'],))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        
+        return row['user2_id'] if row['user1_id'] == user_id else row['user1_id']
         
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command"""
@@ -268,9 +291,7 @@ class AnonymousChatBot:
         
         gender = query.data.split('_')[1]
         if gender not in ("male", "female"):
-            await query.edit_message_text(
-                "❗️ Please select one of the available options: Male or Female."
-            )
+            await query.edit_message_text(get_text("gender_invalid", lang))
             return
         context.user_data['gender'] = gender
         
@@ -318,114 +339,82 @@ class AnonymousChatBot:
             )
     
     async def search(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /search command - find a chat partner"""
+        """Handle /search command - atomic matchmaking with state machine"""
         user_id = update.effective_user.id
         msg = update.effective_message
+        lang = self._get_user_lang(user_id)
         
         # Check if user is registered
         user = db.get_user(user_id)
         if not user:
             await msg.reply_text(
-                "❗️ Please complete registration first by sending /start"
+                get_text("register_first", lang)
             )
             return
         
         # Check if user is banned
         if user['is_banned']:
             await msg.reply_text(
-                "🚫 You have been banned from using this bot due to violations."
+                get_text("banned", lang)
             )
             return
         
-        # Check if already in a chat
-        if user_id in self.active_chats:
+        # Check current state
+        state_info = db.get_user_state(user_id)
+        if state_info and state_info['state'] == 'CHATTING':
             await msg.reply_text(
-                "❗️ You're already in a chat. Use /stop to end it first."
+                get_text("already_in_chat", lang)
             )
             return
         
-        # Check if already searching
-        if user_id in self.search_queue:
+        if state_info and state_info['state'] == 'SEARCHING':
             await msg.reply_text(
-                "⏳ You're already in the search queue. Please wait..."
-            )
-            return
-
-        # VIP-only: allow choosing preferred partner gender before joining the queue.
-        # Stored in memory only (per bot process) via context.user_data.
-        if user.get('is_vip') and context.user_data.get('vip_target_gender') is None:
-            keyboard = [
-                [
-                    InlineKeyboardButton("👦 Boy", callback_data="vip_search_male"),
-                    InlineKeyboardButton("👧 Girl", callback_data="vip_search_female"),
-                ],
-                [InlineKeyboardButton("🎲 Random", callback_data="vip_search_any")],
-            ]
-            await msg.reply_text(
-                "👑 VIP Search\n\nChoose who you want to match:",
-                reply_markup=InlineKeyboardMarkup(keyboard),
+                get_text("already_searching", lang)
             )
             return
         
-        # Try to find a partner from queue
-        if self.search_queue:
-            # VIP preference: 'male' | 'female' | 'any' (default)
-            target_gender = context.user_data.get('vip_target_gender')
-            if not target_gender:
-                target_gender = 'any'
-
-            partner_id = None
-            if user.get('is_vip') and target_gender in ('male', 'female'):
-                # Find the first queued user matching the preferred gender.
-                # Note: this is O(n) but queue is expected to be small.
-                for idx, candidate_id in enumerate(self.search_queue):
-                    if candidate_id == user_id:
-                        continue
-                    candidate = db.get_user(candidate_id)
-                    if candidate and (candidate.get('gender') == target_gender):
-                        partner_id = candidate_id
-                        # remove selected candidate from queue
-                        self.search_queue.pop(idx)
-                        break
-
-            # Fallback: just take the first person in queue.
-            if partner_id is None:
-                partner_id = self.search_queue.pop(0)
-            
-            # Make sure partner is not the same user
-            if partner_id == user_id:
-                self.search_queue.append(user_id)
+        # VIP users can choose gender preference
+        if user.get('is_vip'):
+            # Check if preference already set in this session
+            if 'vip_target_gender' not in context.user_data:
+                keyboard = [
+                    [
+                        InlineKeyboardButton("� Girl", callback_data="vip_search_female"),
+                        InlineKeyboardButton("� Boy", callback_data="vip_search_male"),
+                    ],
+                    [InlineKeyboardButton("🎲 Random", callback_data="vip_search_any")],
+                ]
                 await msg.reply_text(
-                    "🔍 Searching for a chat partner..."
+                    get_text("vip_choose_gender", lang),
+                    reply_markup=InlineKeyboardMarkup(keyboard),
                 )
                 return
-
-            # If VIP requested a specific gender but we ended up matching a different one (fallback),
-            # keep UX transparent.
-            if user.get('is_vip') and target_gender in ('male', 'female'):
-                partner = db.get_user(partner_id)
-                if partner and partner.get('gender') != target_gender:
-                    await msg.reply_text(
-                        "ℹ️ No preferred match found right now — matched randomly instead."
-                    )
             
-            # Create chat pair
-            self.active_chats[user_id] = partner_id
-            self.active_chats[partner_id] = user_id
-            
-            # Get partner info for VIP users
+            target_gender = context.user_data.get('vip_target_gender', 'any')
+        else:
+            target_gender = 'any'
+        
+        logger.info(f"[ATOMIC] User {user_id} searching with filter: {target_gender}")
+        
+        # Try atomic match first
+        success, partner_id, message = db.atomic_match(user_id, target_gender)
+        
+        if success and partner_id:
+            # MATCHED!
             partner = db.get_user(partner_id)
+            
+            # Notify both users
             user_is_vip = user['is_vip']
             partner_is_vip = partner['is_vip']
             
-            # Notify both users
-            user_message = "🔹 You are now connected to a partner! Say hi!"
-            partner_message = "🔹 You are now connected to a partner! Say hi!"
+            user_message = get_text("match_found", lang)
+            partner_message = get_text("match_found", self._get_user_lang(partner_id))
             
+            # Add VIP info
             if user_is_vip:
                 gender_emoji = "♂️" if partner['gender'] == 'male' else "♀️" if partner['gender'] == 'female' else "⚧️"
                 user_message += f"\n\n👑 VIP Info: {gender_emoji} {partner['gender'].capitalize()}, {partner['age']} years old"
-                user_message += "\n" + self._format_partner_ratings_line(partner_id, self._get_user_lang(user_id))
+                user_message += "\n" + self._format_partner_ratings_line(partner_id, lang)
             
             if partner_is_vip:
                 gender_emoji = "♂️" if user['gender'] == 'male' else "♀️" if user['gender'] == 'female' else "⚧️"
@@ -435,108 +424,136 @@ class AnonymousChatBot:
             await msg.reply_text(user_message)
             await context.bot.send_message(partner_id, partner_message)
             
+            logger.info(f"[ATOMIC] Matched {user_id} <-> {partner_id} (filter: {target_gender}, partner_gender: {partner['gender']})")
+            
         else:
-            # Add to queue
-            self.search_queue.append(user_id)
-            await msg.reply_text(
-                "🔍 Searching for a chat partner...\n"
-                "You'll be notified when someone is found."
-            )
+            # No match found, join queue
+            success, queue_message = db.atomic_join_queue(user_id, target_gender)
+            
+            if success:
+                await msg.reply_text(
+                    get_text("searching", lang)
+                )
+                logger.info(f"[ATOMIC] User {user_id} joined queue with filter: {target_gender}")
+            else:
+                await msg.reply_text(
+                    f"❗️ {queue_message}"
+                )
+                logger.warning(f"[ATOMIC] User {user_id} failed to join queue: {queue_message}")
 
     async def vip_search_choice_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """VIP-only: handle gender choice before searching."""
         query = update.callback_query
         await query.answer()
+        
+        user_id = update.effective_user.id
+        lang = self._get_user_lang(user_id)
+        
+        # Prevent choice change if already searching/chatting
+        state_info = db.get_user_state(user_id)
+        if state_info and state_info['state'] in ('SEARCHING', 'CHATTING'):
+            await query.edit_message_text(
+                get_text("already_in_state", lang).format(state=state_info['state'].lower())
+            )
+            return
 
         choice = query.data
         if choice == "vip_search_male":
             context.user_data['vip_target_gender'] = 'male'
-            label = "Boy"
+            label = get_text('vip_label_boy', lang)
         elif choice == "vip_search_female":
             context.user_data['vip_target_gender'] = 'female'
-            label = "Girl"
+            label = get_text('vip_label_girl', lang)
         else:
             context.user_data['vip_target_gender'] = 'any'
-            label = "Random"
+            label = get_text('vip_label_random', lang)
 
         await query.edit_message_text(
-            f"👑 VIP Search preference saved: {label}\n\nStarting search..."
+            get_text('vip_search_preference_set', lang, label=label)
         )
 
-        # Continue with the normal search flow.
-        # NOTE: callback queries don't have `update.message`, so `search()` uses
-        # `update.effective_message` for replies.
+        # Continue with atomic search
         await self.search(update, context)
     
     async def stop(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /stop command - end current chat"""
+        """Handle /stop command - end current chat or search (atomic)"""
         user_id = update.effective_user.id
+        lang = self._get_user_lang(user_id)
 
-        # VIP: force choice again next time they search.
-        # (We clear it on /stop so user can pick Boy/Girl/Random again.)
-        if context.user_data.get('vip_target_gender') is not None:
-            context.user_data['vip_target_gender'] = None
+        # Clear VIP preference for next search
+        if 'vip_target_gender' in context.user_data:
+            del context.user_data['vip_target_gender']
 
-        # If user is searching, cancel search.
-        if user_id in self.search_queue:
-            try:
-                self.search_queue.remove(user_id)
-            except ValueError:
-                pass
+        # Check state
+        state_info = db.get_user_state(user_id)
+        if not state_info:
             await update.message.reply_text(
-                "🛑 Search cancelled.\nUse /search when you want to find a partner again."
+                get_text("not_in_chat_or_search", lang)
             )
             return
         
-        if user_id not in self.active_chats:
-            await update.message.reply_text(
-                "❗️ You're not in an active chat."
-            )
+        if state_info['state'] == 'SEARCHING':
+            # Leave queue
+            success, message = db.atomic_leave_queue(user_id)
+            if success:
+                await update.message.reply_text(
+                    get_text("search_cancelled", lang)
+                )
+                logger.info(f"[ATOMIC] User {user_id} left search queue")
+            else:
+                await update.message.reply_text(f"❗️ {message}")
             return
         
-        partner_id = self.active_chats[user_id]
+        if state_info['state'] == 'CHATTING':
+            # End chat
+            success, partner_id, message = db.atomic_end_chat(user_id)
+            if success and partner_id:
+                # Show rating to both users
+                await self.show_rating(update, context, user_id, partner_id)
+                await self.show_rating_to_user(context, partner_id, user_id)
+                
+                # Notify partner
+                partner_lang = self._get_user_lang(partner_id)
+                await context.bot.send_message(
+                    partner_id,
+                    get_text("partner_left", partner_lang)
+                )
+                
+                logger.info(f"[ATOMIC] User {user_id} ended chat with {partner_id}")
+            else:
+                await update.message.reply_text(f"❗️ {message}")
+            return
         
-        # End chat
-        del self.active_chats[user_id]
-        del self.active_chats[partner_id]
-        
-        # Show rating to both users
-        await self.show_rating(update, context, user_id, partner_id)
-        await self.show_rating_to_user(context, partner_id, user_id)
-        
-        # Notify partner
-        await context.bot.send_message(
-            partner_id,
-            "🔸 Your partner has left the chat.\n\n"
-            "Use /search to find a new partner."
+        await update.message.reply_text(
+            get_text("not_in_chat_or_search", lang)
         )
 
     async def sharelink(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Share your Telegram @username / t.me link with your current partner (consent-based)."""
         user_id = update.effective_user.id
+        lang = self._get_user_lang(user_id)
 
-        if user_id not in self.active_chats:
+        partner_id = self._get_partner_id(user_id)
+        if not partner_id:
             await update.message.reply_text(
-                "❗️ You're not in an active chat. Use /search to find a partner first."
+                get_text("not_in_chat", lang)
             )
             return
 
         username = update.effective_user.username
         if not username:
             await update.message.reply_text(
-                "❗️ You don't have a Telegram username set.\n\n"
-                "Set one in Telegram Settings → Username, then try /sharelink again."
+                get_text("no_username", lang)
             )
             return
 
         # Ask for confirmation to avoid accidental doxxing.
         keyboard = [[
-            InlineKeyboardButton("✅ Share", callback_data="sharelink_confirm"),
-            InlineKeyboardButton("❌ Cancel", callback_data="sharelink_cancel"),
+            InlineKeyboardButton(get_text("sharelink_btn_share", lang), callback_data="sharelink_confirm"),
+            InlineKeyboardButton(get_text("sharelink_btn_cancel", lang), callback_data="sharelink_cancel"),
         ]]
         await update.message.reply_text(
-            f"🔗 Share your Telegram link with your partner?\n\n"
-            f"This will send: https://t.me/{username}",
+            get_text("sharelink_prompt", lang, username=username),
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
@@ -546,62 +563,149 @@ class AnonymousChatBot:
         await query.answer()
 
         user_id = update.effective_user.id
+        lang = self._get_user_lang(user_id)
         action = query.data
 
         if action == "sharelink_cancel":
-            await query.edit_message_text("❌ Share cancelled.")
+            await query.edit_message_text(get_text("share_cancelled", lang))
             return
 
-        if user_id not in self.active_chats:
+        partner_id = self._get_partner_id(user_id)
+        if not partner_id:
             await query.edit_message_text(
-                "❗️ You're not in an active chat anymore. Use /search to find a partner."
+                get_text("not_in_chat", lang)
             )
             return
 
         username = update.effective_user.username
         if not username:
             await query.edit_message_text(
-                "❗️ You don't have a Telegram username set.\n\n"
-                "Set one in Telegram Settings → Username, then try /sharelink again."
+                get_text("no_username", lang)
             )
             return
 
-        partner_id = self.active_chats[user_id]
         link = f"https://t.me/{username}"
 
         await context.bot.send_message(
             partner_id,
             f"🔗 Your partner shared their Telegram: @{username}\n{link}"
         )
-        await query.edit_message_text("✅ Your Telegram link was shared with your partner.")
+        await query.edit_message_text(get_text("sharelink_shared", lang))
     
     async def next_partner(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /next command - find next partner"""
+        """
+        Handle /next command - atomic super-operation.
+        Ends current chat + starts new search in one transaction.
+        Prevents race conditions.
+        """
         user_id = update.effective_user.id
+        lang = self._get_user_lang(user_id)
+        msg = update.effective_message
 
-        # VIP: force choice again next time they search.
-        if context.user_data.get('vip_target_gender') is not None:
-            context.user_data['vip_target_gender'] = None
+        # Clear VIP preference
+        if 'vip_target_gender' in context.user_data:
+            del context.user_data['vip_target_gender']
         
-        if user_id in self.active_chats:
-            # End current chat first
-            partner_id = self.active_chats[user_id]
-            del self.active_chats[user_id]
-            del self.active_chats[partner_id]
-            
-            # Show rating
-            await self.show_rating(update, context, user_id, partner_id)
-            await self.show_rating_to_user(context, partner_id, user_id)
-            
-            # Notify partner
-            await context.bot.send_message(
-                partner_id,
-                "🔸 Your partner has left the chat.\n\n"
-                "Use /search to find a new partner."
+        # Get user info for VIP filter
+        user = db.get_user(user_id)
+        if not user:
+            await msg.reply_text(
+                get_text("register_first", lang)
             )
+            return
         
-        # Start new search
-        await self.search(update, context)
+        # VIP users can choose target gender for /next
+        target_gender = 'any'
+        if user.get('is_vip'):
+            # Check if preference set for /next
+            if 'vip_next_target_gender' not in context.user_data:
+                keyboard = [
+                    [
+                        InlineKeyboardButton("👧 Girl", callback_data="vip_next_female"),
+                        InlineKeyboardButton("👦 Boy", callback_data="vip_next_male"),
+                    ],
+                    [InlineKeyboardButton("🎲 Random", callback_data="vip_next_any")],
+                ]
+                await msg.reply_text(
+                    "👑 VIP /next: Choose gender preference:",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                )
+                return
+            
+            target_gender = context.user_data.get('vip_next_target_gender', 'any')
+            del context.user_data['vip_next_target_gender']
+        
+        logger.info(f"[ATOMIC /next] User {user_id} with filter: {target_gender}")
+        
+        # Execute atomic next operation
+        success, action, data = db.atomic_next_partner(user_id, target_gender)
+        
+        if not success:
+            await msg.reply_text(
+                f"❗️ Error: {data.get('message', 'Unknown error')}"
+            )
+            logger.error(f"[ATOMIC /next] Failed for {user_id}: {data.get('message')}")
+            return
+        
+        if action == 'matched':
+            # Matched immediately!
+            partner_info = data['partner']
+            partner_id = partner_info['user_id']
+            
+            # Notify both users
+            user_message = get_text("match_found", lang)
+            partner_message = get_text("match_found", self._get_user_lang(partner_id))
+            
+            # Add VIP info
+            if user.get('is_vip'):
+                gender_emoji = "♂️" if partner_info['gender'] == 'male' else "♀️" if partner_info['gender'] == 'female' else "⚧️"
+                user_message += f"\n\n👑 VIP Info: {gender_emoji} {partner_info['gender'].capitalize()}, {partner_info['age']} years old"
+                user_message += "\n" + self._format_partner_ratings_line(partner_id, lang)
+            
+            if partner_info['is_vip']:
+                gender_emoji = "♂️" if user['gender'] == 'male' else "♀️" if user['gender'] == 'female' else "⚧️"
+                partner_message += f"\n\n👑 VIP Info: {gender_emoji} {user['gender'].capitalize()}, {user['age']} years old"
+                partner_message += "\n" + self._format_partner_ratings_line(user_id, self._get_user_lang(partner_id))
+            
+            await msg.reply_text(user_message)
+            await context.bot.send_message(partner_id, partner_message)
+            
+            logger.info(f"[ATOMIC /next] Matched {user_id} <-> {partner_id}")
+            
+        elif action == 'searching':
+            # Joined queue
+            await msg.reply_text(
+                get_text("searching", lang)
+            )
+            logger.info(f"[ATOMIC /next] User {user_id} joined queue")
+        
+        else:
+            await msg.reply_text(
+                f"❗️ Unexpected result: {action}"
+            )
+    
+    async def vip_next_choice_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """VIP-only: handle gender choice for /next command."""
+        query = update.callback_query
+        await query.answer()
+        
+        choice = query.data
+        if choice == "vip_next_male":
+            context.user_data['vip_next_target_gender'] = 'male'
+            label = "Boy"
+        elif choice == "vip_next_female":
+            context.user_data['vip_next_target_gender'] = 'female'
+            label = "Girl"
+        else:
+            context.user_data['vip_next_target_gender'] = 'any'
+            label = "Random"
+        
+        await query.edit_message_text(
+            f"👑 VIP /next preference: {label}\n\n🔄 Finding next partner..."
+        )
+        
+        # Continue with atomic next
+        await self.next_partner(update, context)
     
     async def show_rating(self, update: Update, context: ContextTypes.DEFAULT_TYPE, rater_id: int, target_id: int):
         """Show rating buttons to user"""
@@ -630,7 +734,7 @@ class AnonymousChatBot:
         
         await context.bot.send_message(
             rater_id,
-            "Please rate your chat partner:",
+            get_text("rate_partner", self._get_user_lang(rater_id)),
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
@@ -659,16 +763,17 @@ class AnonymousChatBot:
                 )
             
             await query.edit_message_text(
-                "⛔ Thank you for your report. Our team will review this case."
+                get_text("thanks_report", self._get_user_lang(rater_id))
             )
         else:
             await query.edit_message_text(
-                f"Thank you for rating your partner! ({rating_type})"
+                get_text("thanks_rating_with_type", self._get_user_lang(rater_id), rating_type=rating_type)
             )
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle regular messages - relay to chat partner"""
         user_id = update.effective_user.id
+        lang = self._get_user_lang(user_id)
 
         # Profile edit: age input
         if context.user_data.get('awaiting_age_edit'):
@@ -676,17 +781,17 @@ class AnonymousChatBot:
                 age = int(update.message.text)
                 if age < 12 or age > 99:
                     await update.message.reply_text(
-                        "❗️ Age must be between 12 and 99. Please enter your age again:"
+                        get_text("age_invalid_range", lang)
                     )
                     return
 
                 db.update_age(user_id, age)
                 context.user_data['awaiting_age_edit'] = False
                 await update.message.reply_text(
-                    "✅ Age updated!\n\nSend /profile to view your updated profile."
+                    get_text("age_updated", lang)
                 )
             except ValueError:
-                await update.message.reply_text("❗️ Please enter a valid number (12–99):")
+                await update.message.reply_text(get_text("age_invalid_number_simple", lang))
             return
         
         # Check if awaiting age input
@@ -694,28 +799,27 @@ class AnonymousChatBot:
             await self.handle_age_input(update, context)
             return
         
-        # Check if in active chat
-        if user_id not in self.active_chats:
+        # Check if in active chat (atomic)
+        partner_id = self._get_partner_id(user_id)
+        if not partner_id:
             await update.message.reply_text(
-                "❗️ You're not in an active chat.\n"
-                "Use /search to find a partner."
+                get_text("not_in_chat", lang)
             )
             return
         
-        partner_id = self.active_chats[user_id]
         message_text = update.message.text
         
         # Check for links
         if self.contains_link(message_text):
             await update.message.reply_text(
-                "🚫 Links are not allowed in this chat."
+                get_text("no_links", lang)
             )
             return
         
         # Check for bad words (basic filter)
         if self.contains_bad_words(message_text):
             await update.message.reply_text(
-                "🚫 Please keep the conversation respectful."
+                get_text("keep_respectful", lang)
             )
             return
         
@@ -725,20 +829,20 @@ class AnonymousChatBot:
         except Exception as e:
             logger.error(f"Error sending message: {e}")
             await update.message.reply_text(
-                "❗️ Failed to send message. Your partner may have left."
+                get_text("send_failed", lang)
             )
 
     async def handle_media(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Relay non-text messages (photos, videos, GIFs, etc.) to chat partner."""
         user_id = update.effective_user.id
 
-        if user_id not in self.active_chats:
+        partner_id = self._get_partner_id(user_id)
+        if not partner_id:
             await update.effective_message.reply_text(
                 "❗️ You're not in an active chat.\nUse /search to find a partner."
             )
             return
 
-        partner_id = self.active_chats[user_id]
         msg = update.effective_message
 
         # Copy keeps anonymity (no forward header) and preserves caption + formatting.
@@ -815,17 +919,20 @@ class AnonymousChatBot:
         query = update.callback_query
         await query.answer()
 
+        user_id = update.effective_user.id
+        lang = self._get_user_lang(user_id)
+
         keyboard = [
             [
-                InlineKeyboardButton("♂️ Male", callback_data="edit_gender_male"),
-                InlineKeyboardButton("♀️ Female", callback_data="edit_gender_female"),
+                InlineKeyboardButton(get_text("gender_male", lang), callback_data="edit_gender_male"),
+                InlineKeyboardButton(get_text("gender_female", lang), callback_data="edit_gender_female"),
             ],
-            [InlineKeyboardButton("🎂 Edit Age", callback_data="edit_age")],
-            [InlineKeyboardButton("⬅️ Back", callback_data="edit_back_profile")],
+            [InlineKeyboardButton(get_text("edit_profile_btn_edit_age", lang), callback_data="edit_age")],
+            [InlineKeyboardButton(get_text("edit_profile_btn_back", lang), callback_data="edit_back_profile")],
         ]
 
         await query.edit_message_text(
-            "✏️ Edit Profile\n\nChoose what you want to change:",
+            get_text("edit_profile_title", lang),
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
@@ -835,25 +942,26 @@ class AnonymousChatBot:
         await query.answer()
 
         user_id = update.effective_user.id
-        gender = query.data.split('_')[-1]  # male|female
+        lang = self._get_user_lang(user_id)
+
+        gender = query.data.split("_")[-1]  # male|female
         if gender not in ("male", "female"):
-            await query.edit_message_text("❗️ Invalid gender choice.")
+            await query.edit_message_text(get_text("invalid_gender_choice", lang))
             return
 
         db.update_gender(user_id, gender)
-        await query.edit_message_text(
-            f"✅ Gender updated to: {gender.capitalize()}\n\nSend /profile to view your updated profile."
-        )
+        await query.edit_message_text(get_text("gender_updated", lang, gender=gender.capitalize()))
 
     async def edit_profile_age_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start age edit: next text message will be treated as new age."""
         query = update.callback_query
         await query.answer()
 
-        context.user_data['awaiting_age_edit'] = True
-        await query.edit_message_text(
-            "🎂 Enter your new age (12–99):\n\nSend a number as a message."
-        )
+        user_id = update.effective_user.id
+        lang = self._get_user_lang(user_id)
+
+        context.user_data["awaiting_age_edit"] = True
+        await query.edit_message_text(get_text("edit_profile_enter_age", lang))
 
     async def edit_profile_back_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Go back to profile view from edit menu."""
@@ -861,9 +969,11 @@ class AnonymousChatBot:
         await query.answer()
 
         user_id = update.effective_user.id
+        lang = self._get_user_lang(user_id)
+
         user = db.get_user(user_id)
         if not user:
-            await query.edit_message_text("❗️ Please complete registration first by sending /start")
+            await query.edit_message_text(get_text("register_first", lang))
             return
 
         gender_emoji = (
@@ -1176,8 +1286,8 @@ class AnonymousChatBot:
             f"👥 Total Users: {stats['total_users']}\n"
             f"👑 VIP Users: {stats['vip_users']}\n"
             f"🚫 Banned Users: {stats['banned_users']}\n"
-            f"💬 Active Chats: {len(self.active_chats) // 2}\n"
-            f"🔍 Users in Queue: {len(self.search_queue)}\n"
+            f"💬 Active Chats: {stats['active_chats']}\n"
+            f"🔍 Users in Queue: {stats['in_queue']}\n"
             f"⭐ Total Ratings: {stats['total_ratings']}\n"
             f"⛔ Total Reports: {stats['total_reports']}"
         )
@@ -1204,16 +1314,15 @@ class AnonymousChatBot:
                 return
             db.ban_user(target_id)
             
-            # Disconnect if in chat
-            if target_id in self.active_chats:
-                partner_id = self.active_chats[target_id]
-                del self.active_chats[target_id]
-                del self.active_chats[partner_id]
-                
-                await context.bot.send_message(
-                    partner_id,
-                    "Your partner has been disconnected."
-                )
+            # Disconnect if in chat (atomic)
+            state_info = db.get_user_state(target_id)
+            if state_info and state_info['state'] == 'CHATTING':
+                success, partner_id, message = db.atomic_end_chat(target_id)
+                if success and partner_id:
+                    await context.bot.send_message(
+                        partner_id,
+                        "Your partner has been disconnected."
+                    )
             
             await context.bot.send_message(
                 target_id,
@@ -1411,6 +1520,7 @@ def main():
     application.add_handler(CallbackQueryHandler(bot.edit_profile_age_callback, pattern="^edit_age$"))
     application.add_handler(CallbackQueryHandler(bot.edit_profile_back_callback, pattern="^edit_back_profile$"))
     application.add_handler(CallbackQueryHandler(bot.vip_search_choice_callback, pattern="^vip_search_"))
+    application.add_handler(CallbackQueryHandler(bot.vip_next_choice_callback, pattern="^vip_next_"))
     application.add_handler(CallbackQueryHandler(bot.sharelink_callback, pattern="^sharelink_"))
     application.add_handler(CallbackQueryHandler(bot.buy_vip_callback, pattern="^buy_vip$"))
     
