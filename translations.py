@@ -162,6 +162,77 @@ TRANSLATIONS = {
         "ru": "✏️ Редактировать профиль",
         "hy": "✏️ Խմբագրել պրոֆիլը",
     },
+    "profile_vip_days": {
+        "en": "👑 VIP Member ({days} days remaining)",
+        "ru": "👑 VIP Участник (осталось {days} дн.)",
+        "hy": "👑 VIP Անդամ ({days} օր մնացել է)",
+    },
+
+    "vip_renew_button": {
+        "en": "🔄 Renew VIP",
+        "ru": "🔄 Продлить VIP",
+        "hy": "🔄 Թարմացնել VIP-ը",
+    },
+    "vip_buy_button": {
+        "en": "⭐ Buy VIP",
+        "ru": "⭐ Купить VIP",
+        "hy": "⭐ Գնել VIP",
+    },
+    "vip_choose_plan": {
+        "en": "⭐ Choose a VIP plan:",
+        "ru": "⭐ Выберите VIP тариф:",
+        "hy": "⭐ Ընտրեք VIP փաթեթը՝",
+    },
+    "vip_plan_button": {
+        "en": "{days} days — {stars} Stars",
+        "ru": "{days} дн. — {stars} Stars",
+        "hy": "{days} օր — {stars} Stars",
+    },
+    "vip_active_text": {
+        "en": "👑 You are a VIP Member!\n\n⏰ Your VIP expires in {days} days\n\nVIP Benefits:\n• Choose partner gender\n• See partner's age and gender\n• Priority matching\n• Special VIP badge\n\n💡 You can renew your subscription anytime!",
+        "ru": "👑 У вас VIP статус!\n\n⏰ Ваш VIP истекает через {days} дн.\n\nПреимущества VIP:\n• Выбор пола собеседника\n• Просмотр пола и возраста собеседника\n• Приоритет в поиске\n• Специальный VIP значок\n\n💡 Вы можете продлить подписку в любой момент!",
+        "hy": "👑 Դուք VIP անդամ եք։\n\n⏰ Ձեր VIP-ը կլրանա {days} օրից\n\nVIP առավելություններ՝\n• Ընտրել զրուցակցի սեռը\n• Տեսնել զրուցակցի սեռն ու տարիքը\n• Առաջնահերթ որոնում\n• Հատուկ VIP նշան\n\n💡 Կարող եք թարմացնել բաժանորդագրությունը ցանկացած պահին։",
+    },
+    "vip_expired_text": {
+        "en": "⚠️ Your VIP subscription has expired!\n\nRenew now to get back:\n• Choose partner gender\n• See partner's age and gender\n• Priority matching\n• Special VIP badge\n\nAvailable plans:\n{plans}",
+        "ru": "⚠️ Ваша VIP подписка истекла!\n\nПродлите сейчас, чтобы снова получить:\n• Выбор пола собеседника\n• Просмотр пола и возраста собеседника\n• Приоритет в поиске\n• Специальный VIP значок\n\nДоступные тарифы:\n{plans}",
+        "hy": "⚠️ Ձեր VIP բաժանորդագրությունը լրացել է։\n\nԹարմացրեք հիմա, որպեսզի կրկին ստանաք՝\n• Զրուցակցի սեռի ընտրություն\n• Զրուցակցի սեռի և տարիքի տեսանելիություն\n• Առաջնահերթ որոնում\n• Հատուկ VIP նշան\n\nՀասանելի փաթեթներ՝\n{plans}",
+    },
+    "vip_lifetime_text": {
+        "en": "👑 You have lifetime VIP status!\n\nVIP Benefits:\n• Choose partner gender\n• See partner's age and gender\n• Priority matching\n• Special VIP badge",
+        "ru": "👑 У вас пожизненный VIP статус!\n\nПреимущества VIP:\n• Выбор пола собеседника\n• Просмотр пола и возраста собеседника\n• Приоритет в поиске\n• Специальный VIP значок",
+        "hy": "👑 Դուք ունեք ցմահ VIP կարգավիճակ։\n\nVIP առավելություններ՝\n• Ընտրել զրուցակցի սեռը\n• Տեսնել զրուցակցի սեռն ու տարիքը\n• Առաջնահերթ որոնում\n• Հատուկ VIP նշան",
+    },
+    "vip_info_text": {
+        "en": "👑 VIP Membership Benefits:\n\n✅ Choose your partner's gender before matching\n✅ See your partner's age and gender during chats\n✅ Priority matching in the queue\n✅ Special VIP badge in your profile\n✅ Support the bot development\n\nAvailable plans:\n{plans}\n\nUpgrade now to enhance your anonymous chat experience!",
+        "ru": "👑 Преимущества VIP подписки:\n\n✅ Выбор пола собеседника перед поиском\n✅ Просмотр пола и возраста собеседника во время чата\n✅ Приоритет в очереди поиска\n✅ Специальный VIP значок в профиле\n✅ Поддержка развития бота\n\nДоступные тарифы:\n{plans}\n\nУлучшите свой анонимный чат уже сейчас!",
+        "hy": "👑 VIP բաժանորդագրության առավելությունները՝\n\n✅ Ընտրել զրուցակցի սեռը մինչև որոնումը\n✅ Տեսնել զրուցակցի սեռն ու տարիքը զրույցի ընթացքում\n✅ Առաջնահերթ հերթ որոնման մեջ\n✅ Հատուկ VIP նշան պրոֆիլում\n✅ Աջակցել բոտի զարգացմանը\n\nՀասանելի փաթեթներ՝\n{plans}\n\nԹարմացրեք հիմա՝ ձեր անանուն զրույցը բարելավելու համար։",
+    },
+    "vip_invoice_title": {
+        "en": "VIP Membership ({days} days)",
+        "ru": "VIP Подписка ({days} дн.)",
+        "hy": "VIP Բաժանորդագրություն ({days} օր)",
+    },
+    "vip_invoice_description": {
+        "en": "Get VIP status for {days} days with exclusive benefits!",
+        "ru": "Получите VIP статус на {days} дн. с эксклюзивными преимуществами!",
+        "hy": "Ստացեք VIP կարգավիճակ {days} օրով բացառիկ առավելություններով։",
+    },
+    "vip_payment_success": {
+        "en": "🎉 Congratulations! You are now a VIP member!\n\n✨ Your VIP subscription is active for {days} days\n\nVIP Benefits:\n• Choose your partner's gender\n• See partner's age and gender\n• Priority matching\n• Special VIP badge\n\n💡 Use /vip to check your subscription status anytime!",
+        "ru": "🎉 Поздравляем! Теперь у вас VIP статус!\n\n✨ Ваша VIP подписка активна {days} дн.\n\nПреимущества VIP:\n• Выбор пола собеседника\n• Просмотр пола и возраста собеседника\n• Приоритет в поиске\n• Специальный VIP значок\n\n💡 Используйте /vip, чтобы проверить статус подписки в любое время!",
+        "hy": "🎉 Շնորհավորում ենք։ Այժմ դուք VIP անդամ եք։\n\n✨ Ձեր VIP բաժանորդագրությունը ակտիվ է {days} օր\n\nVIP առավելություններ՝\n• Ընտրել զրուցակցի սեռը\n• Տեսնել զրուցակցի սեռն ու տարիքը\n• Առաջնահերթ որոնում\n• Հատուկ VIP նշան\n\n💡 Օգտագործեք /vip՝ ցանկացած պահին բաժանորդագրության կարգավիճակը ստուգելու համար։",
+    },
+    "rules_text": {
+        "en": "📜 Chat Rules\n\n1️⃣ No sharing of links or external contact info\n2️⃣ Be respectful - harassment and hate speech are not allowed\n3️⃣ No spam, scams, or fraudulent activities\n4️⃣ No explicit, sexual, or inappropriate content\n5️⃣ No impersonation or misleading information\n6️⃣ Use the rating system to report bad behavior\n\n⚠️ Violation of these rules may result in:\n• Warnings\n• Temporary or permanent ban\n• Reported to admins\n\nRemember: Your chats are anonymous to your matches, but admins can trace your Telegram ID if you get reported.\n\nBe kind and enjoy chatting! 💬",
+        "ru": "📜 Правила чата\n\n1️⃣ Нельзя делиться ссылками или внешними контактами\n2️⃣ Будьте уважительны: травля и язык ненависти запрещены\n3️⃣ Никакого спама, мошенничества и обмана\n4️⃣ Никакого откровенного, сексуального или неприемлемого контента\n5️⃣ Никакого выдавания себя за другого или введения в заблуждение\n6️⃣ Используйте систему оценок, чтобы сообщать о плохом поведении\n\n⚠️ Нарушение этих правил может привести к:\n• Предупреждениям\n• Временному или постоянному бану\n• Жалобе администраторам\n\nПомните: ваши чаты анонимны для собеседников, но администраторы могут установить ваш Telegram ID, если на вас пожалуются.\n\nБудьте вежливы и приятного общения! 💬",
+        "hy": "📜 Զրույցի կանոններ\n\n1️⃣ Մի կիսվեք հղումներով կամ արտաքին կոնտակտներով\n2️⃣ Եղեք հարգալից. հետապնդումն ու ատելության խոսքը արգելված են\n3️⃣ Ոչ մի սպամ, խաբեություն կամ կեղծ գործունեություն\n4️⃣ Ոչ մի բացահայտ, սեռական կամ անպատշաճ բովանդակություն\n5️⃣ Մի ներկայացեք ուրիշի անունից և մի մոլորեցրեք\n6️⃣ Օգտագործեք գնահատման համակարգը վատ վարքագիծը հայտնելու համար\n\n⚠️ Այս կանոնների խախտումը կարող է հանգեցնել՝\n• Զգուշացման\n• Ժամանակավոր կամ մշտական արգելափակման\n• Բողոքի ադմիններին\n\nՀիշեք. ձեր զրույցները անանուն են զրուցակիցների համար, բայց բողոքի դեպքում ադմինները կարող են պարզել ձեր Telegram ID-ն։\n\nԵղեք բարի և հաճելի զրույց մաղթում ենք։ 💬",
+    },
+    "help_text": {
+        "en": "🤖 Anonymous Chat Bot Help\n\nCommands:\n/start - Start the bot and register\n/search - Find a random chat partner\n/stop - End current chat\n/next - Find next partner\n/profile - View/edit your profile\n/vip - Learn about VIP membership\n/rules - View chat rules\n/help - Show this help message\n\nHow it works:\n1️⃣ Register with your gender and age\n2️⃣ Use /search to find a random partner\n3️⃣ Chat anonymously - your identity is hidden\n4️⃣ Rate your partner after each chat\n5️⃣ Use /next to find a new partner anytime\n\n💡 Tip: Upgrade to VIP to see your partner's info!",
+        "ru": "🤖 Помощь по анонимному чат-боту\n\nКоманды:\n/start - Запустить бота и зарегистрироваться\n/search - Найти случайного собеседника\n/stop - Завершить текущий чат\n/next - Найти следующего собеседника\n/profile - Просмотреть или изменить профиль\n/vip - Узнать о VIP подписке\n/rules - Посмотреть правила чата\n/help - Показать это сообщение\n\nКак это работает:\n1️⃣ Зарегистрируйтесь, указав пол и возраст\n2️⃣ Используйте /search, чтобы найти случайного собеседника\n3️⃣ Общайтесь анонимно: ваша личность скрыта\n4️⃣ Оценивайте собеседника после каждого чата\n5️⃣ Используйте /next, чтобы в любой момент найти нового собеседника\n\n💡 Совет: оформите VIP, чтобы видеть информацию о собеседнике!",
+        "hy": "🤖 Անանուն չաթ բոտի օգնություն\n\nՀրամաններ՝\n/start - Մեկնարկել բոտը և գրանցվել\n/search - Գտնել պատահական զրուցակից\n/stop - Ավարտել ընթացիկ զրույցը\n/next - Գտնել հաջորդ զրուցակցին\n/profile - Տեսնել կամ խմբագրել պրոֆիլը\n/vip - Տեղեկանալ VIP բաժանորդագրության մասին\n/rules - Տեսնել զրույցի կանոնները\n/help - Ցույց տալ այս օգնությունը\n\nԻնչպես է աշխատում՝\n1️⃣ Գրանցվեք՝ նշելով սեռը և տարիքը\n2️⃣ Օգտագործեք /search պատահական զրուցակից գտնելու համար\n3️⃣ Զրուցեք անանուն. ձեր ինքնությունը թաքնված է\n4️⃣ Ամեն զրույցից հետո գնահատեք զրուցակցին\n5️⃣ Օգտագործեք /next ցանկացած պահին նոր զրուցակից գտնելու համար\n\n💡 Խորհուրդ. միացրեք VIP-ը, որպեսզի տեսնեք զրուցակցի տվյալները։",
+    },
     
     # Menu buttons
     "btn_search": {
@@ -231,6 +302,11 @@ TRANSLATIONS = {
         "ru": "❗️ Вы еще не подписались на все обязательные каналы.\nПожалуйста, подпишитесь на все каналы и попробуйте снова.",
         "hy": "❗️ Դուք դեռ բաժանորդագրված չեք բոլոր պարտադիր ալիքներին։\nԽնդրում ենք բաժանորդագրվել բոլոր ալիքներին և փորձել կրկին։",
     },
+    "subscription_not_all_with_channels": {
+        "en": "❗️ You haven't joined all required channels yet.\n\nPlease subscribe to these channels:\n\n{channel_links}\n\nAfter subscribing, click the button below again:",
+        "ru": "❗️ Вы еще не подписались на все обязательные каналы.\n\nПожалуйста, подпишитесь на эти каналы:\n\n{channel_links}\n\nПосле подписки снова нажмите кнопку ниже:",
+        "hy": "❗️ Դուք դեռ բաժանորդագրված չեք բոլոր պարտադիր ալիքներին։\n\nԽնդրում ենք բաժանորդագրվել այս ալիքներին՝\n\n{channel_links}\n\nԲաժանորդագրվելուց հետո կրկին սեղմեք ստորև գտնվող կոճակը:",
+    },
     "subscription_verified": {
         "en": "✅ Subscription verified! You can now use the bot.\n\nLet's complete your registration...",
         "ru": "✅ Подписка подтверждена! Теперь вы можете пользоваться ботом.\n\nДавайте завершим вашу регистрацию...",
@@ -249,9 +325,19 @@ TRANSLATIONS = {
         "hy": "Օգտագործում՝ /unban <user_id | @username>",
     },
     "admin_usage_givevip": {
-        "en": "Usage: /givevip <user_id | @username>",
-        "ru": "Использование: /givevip <user_id | @username>",
-        "hy": "Օգտագործում՝ /givevip <user_id | @username>",
+        "en": "Usage: /givevip <user_id | @username> <days>",
+        "ru": "Использование: /givevip <user_id | @username> <days>",
+        "hy": "Օգտագործում՝ /givevip <user_id | @username> <days>",
+    },
+    "admin_usage_takevip": {
+        "en": "Usage: /takevip <user_id | @username>",
+        "ru": "Использование: /takevip <user_id | @username>",
+        "hy": "Օգտագործում՝ /takevip <user_id | @username>",
+    },
+    "admin_usage_viplist": {
+        "en": "Usage: /viplist",
+        "ru": "Использование: /viplist",
+        "hy": "Օգտագործում՝ /viplist",
     },
     "admin_usage_broadcast": {
         "en": "Usage: /broadcast <message>",
@@ -283,6 +369,66 @@ TRANSLATIONS = {
         "ru": "Нет недавних жалоб.",
         "hy": "Վերջին բողոքներ չկան։",
     },
+    "admin_invalid_days": {
+        "en": "❗️ Days must be a positive number.",
+        "ru": "❗️ Количество дней должно быть положительным числом.",
+        "hy": "❗️ Օրերի քանակը պետք է լինի դրական թիվ։",
+    },
+    "admin_vip_granted_target": {
+        "en": "🎉 You have been granted VIP status by an admin for {days} days!",
+        "ru": "🎉 Администратор выдал вам VIP статус на {days} дн.!",
+        "hy": "🎉 Ադմինը ձեզ տվել է VIP կարգավիճակ {days} օրով։",
+    },
+    "admin_vip_granted_done": {
+        "en": "✅ VIP status granted to user {user_id} for {days} days.",
+        "ru": "✅ Пользователю {user_id} выдан VIP на {days} дн.",
+        "hy": "✅ {user_id} օգտատիրոջը տրվեց VIP {days} օրով։",
+    },
+    "admin_vip_removed_target": {
+        "en": "ℹ️ Your VIP status was removed by an admin.",
+        "ru": "ℹ️ Администратор снял ваш VIP статус.",
+        "hy": "ℹ️ Ադմինը հեռացրել է ձեր VIP կարգավիճակը։",
+    },
+    "admin_vip_removed_done": {
+        "en": "✅ VIP status removed from user {user_id}.",
+        "ru": "✅ У пользователя {user_id} снят VIP статус.",
+        "hy": "✅ {user_id} օգտատիրոջ VIP կարգավիճակը հեռացվեց։",
+    },
+    "admin_viplist_empty": {
+        "en": "No active VIP users.",
+        "ru": "Нет активных VIP пользователей.",
+        "hy": "Ակտիվ VIP օգտատերեր չկան։",
+    },
+    "admin_viplist_header": {
+        "en": "👑 VIP users: {count}\n",
+        "ru": "👑 VIP пользователи: {count}\n",
+        "hy": "👑 VIP օգտատերեր՝ {count}\n",
+    },
+    "admin_viplist_user_label": {
+        "en": "@{username} | ID: {user_id}",
+        "ru": "@{username} | ID: {user_id}",
+        "hy": "@{username} | ID: {user_id}",
+    },
+    "admin_viplist_user_id_only": {
+        "en": "ID: {user_id}",
+        "ru": "ID: {user_id}",
+        "hy": "ID: {user_id}",
+    },
+    "admin_viplist_line_days": {
+        "en": "{index}. {user_label}\n   ⏳ {days} days left",
+        "ru": "{index}. {user_label}\n   ⏳ Осталось {days} дн.",
+        "hy": "{index}. {user_label}\n   ⏳ Մնացել է {days} օր",
+    },
+    "admin_viplist_line_lifetime": {
+        "en": "{index}. {user_label}\n   ♾ Lifetime VIP",
+        "ru": "{index}. {user_label}\n   ♾ Пожизненный VIP",
+        "hy": "{index}. {user_label}\n   ♾ Ցմահ VIP",
+    },
+    "help_admin_block": {
+        "en": "\n\nAdmin commands:\n/commands - Show admin command list\n/stats - Bot statistics\n/reports - Recent reports\n/ban <user_id | @username> - Ban user\n/unban <user_id | @username> - Unban user\n/unbanall - Unban everyone\n/givevip <user_id | @username> <days> - Grant VIP for a number of days\n/takevip <user_id | @username> - Remove VIP\n/viplist - Show VIP users and days left\n/broadcast <message> - Send announcement to all users",
+        "ru": "\n\nКоманды администратора:\n/commands - Показать список команд администратора\n/stats - Статистика бота\n/reports - Последние жалобы\n/ban <user_id | @username> - Забанить пользователя\n/unban <user_id | @username> - Разбанить пользователя\n/unbanall - Разбанить всех\n/givevip <user_id | @username> <days> - Выдать VIP на нужное число дней\n/takevip <user_id | @username> - Снять VIP\n/viplist - Показать VIP пользователей и сколько дней осталось\n/broadcast <message> - Отправить объявление всем пользователям",
+        "hy": "\n\nԱդմինի հրամաններ՝\n/commands - Ցույց տալ ադմինի հրամանների ցանկը\n/stats - Բոտի վիճակագրություն\n/reports - Վերջին բողոքները\n/ban <user_id | @username> - Արգելափակել օգտատիրոջը\n/unban <user_id | @username> - Ապաարգելափակել օգտատիրոջը\n/unbanall - Ապաարգելափակել բոլորին\n/givevip <user_id | @username> <days> - Տալ VIP նշված օրերի համար\n/takevip <user_id | @username> - Հեռացնել VIP\n/viplist - Ցույց տալ VIP օգտատերերին և մնացած օրերը\n/broadcast <message> - Հայտարարություն ուղարկել բոլոր օգտատերերին",
+    },
 
     "admin_commands_list": {
         "en": (
@@ -293,7 +439,9 @@ TRANSLATIONS = {
             "/ban <user_id | @username> - Ban user\n"
             "/unban <user_id | @username> - Unban user\n"
             "/unbanall - Unban everyone\n"
-            "/givevip <user_id | @username> - Give VIP\n"
+            "/givevip <user_id | @username> <days> - Give VIP\n"
+            "/takevip <user_id | @username> - Remove VIP\n"
+            "/viplist - Show VIP users and days left\n"
             "/broadcast <message> - Send message to all users"
         ),
         "ru": (
@@ -304,7 +452,9 @@ TRANSLATIONS = {
             "/ban <user_id | @username> - Забанить пользователя\n"
             "/unban <user_id | @username> - Разбанить пользователя\n"
             "/unbanall - Разбанить всех\n"
-            "/givevip <user_id | @username> - Выдать VIP\n"
+            "/givevip <user_id | @username> <days> - Выдать VIP\n"
+            "/takevip <user_id | @username> - Снять VIP\n"
+            "/viplist - Показать VIP и оставшиеся дни\n"
             "/broadcast <message> - Рассылка всем пользователям"
         ),
         "hy": (
@@ -315,7 +465,9 @@ TRANSLATIONS = {
             "/ban <user_id | @username> - Արգելափակել օգտատիրոջը\n"
             "/unban <user_id | @username> - Ապաարգելափակել օգտատիրոջը\n"
             "/unbanall - Ապաարգելափակել բոլորին\n"
-            "/givevip <user_id | @username> - Տալ VIP\n"
+            "/givevip <user_id | @username> <days> - Տալ VIP\n"
+            "/takevip <user_id | @username> - Հեռացնել VIP\n"
+            "/viplist - Ցուցադրել VIP-ներին և մնացած օրերը\n"
             "/broadcast <message> - Ուղարկել բոլոր օգտատերերին"
         ),
     },
@@ -394,6 +546,11 @@ TRANSLATIONS = {
         "en": "🔹 You are now connected to a partner! Say hi!",
         "ru": "🔹 Вы подключены к собеседнику! Поздоровайтесь!",
         "hy": "🔹 Դուք կապված եք զրուցակցի հետ! Ողջունեք!",
+    },
+    "vip_match_upsell": {
+        "en": "\n\nTo view your partner's gender, age, and ratings, buy VIP: /vip",
+        "ru": "\n\nЧтобы видеть пол, возраст и оценки собеседника, купите VIP: /vip",
+        "hy": "\n\nԶրուցակցի սեռը, տարիքը և գնահատականները տեսնելու համար գնեք VIP՝ /vip",
     },
     "searching": {
         "en": "🔍 Searching for a chat partner...\nYou'll be notified when someone is found.",

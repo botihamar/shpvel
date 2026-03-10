@@ -319,13 +319,37 @@ class Database:
         
         remaining = expiration - datetime.now()
         return max(0, remaining.days)
+
+    def get_vip_users(self):
+        """Get all active VIP users with expiration info."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT user_id, username, vip_expires_at
+            FROM users
+            WHERE is_vip = 1
+            ORDER BY vip_expires_at IS NULL DESC, vip_expires_at ASC, user_id ASC
+        ''')
+
+        return [dict(row) for row in cursor.fetchall()]
     
     def check_and_expire_vips(self):
-        """Check and expire VIP subscriptions that have passed their expiration date"""
+        """Expire outdated VIP subscriptions and return affected users."""
         conn = self.get_connection()
         cursor = conn.cursor()
         
         now = datetime.now()
+
+        cursor.execute('''
+            SELECT user_id, language
+            FROM users
+            WHERE is_vip = 1
+            AND vip_expires_at IS NOT NULL
+            AND vip_expires_at < ?
+        ''', (now,))
+        expired_users = [dict(row) for row in cursor.fetchall()]
+
         cursor.execute('''
             UPDATE users 
             SET is_vip = 0 
@@ -333,10 +357,9 @@ class Database:
             AND vip_expires_at IS NOT NULL 
             AND vip_expires_at < ?
         ''', (now,))
-        
-        expired_count = cursor.rowcount
+
         conn.commit()
-        return expired_count
+        return expired_users
     
     def ban_user(self, user_id):
         """Ban a user"""
@@ -814,6 +837,7 @@ class Database:
                 return (False, 'error', {'message': 'User not found'})
             
             # Clean up any existing state
+            old_partner_id = None
             if row['current_chat_id']:
                 chat_id = row['current_chat_id']
 
@@ -825,7 +849,7 @@ class Database:
                 ''', (chat_id,))
                 chat_row = cursor.fetchone()
                 if chat_row:
-                    partner_id = chat_row['user2_id'] if chat_row['user1_id'] == user_id else chat_row['user1_id']
+                    old_partner_id = chat_row['user2_id'] if chat_row['user1_id'] == user_id else chat_row['user1_id']
 
                     cursor.execute('''
                         UPDATE chat_sessions
@@ -838,7 +862,7 @@ class Database:
                         UPDATE users
                         SET state = 'IDLE', current_chat_id = NULL, search_target_gender = NULL, updated_at = CURRENT_TIMESTAMP
                         WHERE user_id = ?
-                    ''', (partner_id,))
+                    ''', (old_partner_id,))
 
             # Defensive cleanup: if there are any other active sessions that still reference this user, end them.
             cursor.execute('''
@@ -937,7 +961,7 @@ class Database:
                     'is_vip': candidate_row['is_vip']
                 }
                 
-                return (True, 'matched', {'partner': partner_info, 'chat_id': chat_id})
+                return (True, 'matched', {'partner': partner_info, 'chat_id': chat_id, 'old_partner_id': old_partner_id})
             else:
                 # No match, join queue
                 cursor.execute('''
@@ -952,7 +976,7 @@ class Database:
                 ''', (target_gender, user_id))
                 
                 conn.commit()
-                return (True, 'searching', {'message': 'Searching for next partner'})
+                return (True, 'searching', {'message': 'Searching for next partner', 'old_partner_id': old_partner_id})
         
         except Exception as e:
             conn.rollback()

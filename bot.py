@@ -26,7 +26,7 @@ from telegram.ext import (
     ConversationHandler
 )
 from database import Database
-from config import BOT_TOKEN, ADMIN_IDS, REQUIRED_CHANNELS, VIP_PRICE_STARS
+from config import BOT_TOKEN, ADMIN_IDS, REQUIRED_CHANNELS, VIP_PRICES
 from translations import get_text
 import re
 from datetime import datetime
@@ -49,6 +49,23 @@ class AnonymousChatBot:
         # REMOVED: self.active_chats and self.search_queue
         # All state now managed atomically in database
         pass
+
+    def _format_vip_plan_lines(self, lang: str) -> str:
+        return "\n".join(
+            f"• {get_text('vip_plan_button', lang, days=days, stars=stars)}"
+            for days, stars in VIP_PRICES.items()
+        )
+
+    def _vip_plan_keyboard(self, lang: str) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    get_text("vip_plan_button", lang, days=days, stars=stars),
+                    callback_data=f"buy_vip_{days}",
+                )
+            ]
+            for days, stars in VIP_PRICES.items()
+        ])
 
     def _format_partner_ratings_line(self, target_user_id: int, lang: str = 'en') -> str:
         """VIP-only: return a one-line summary of partner ratings."""
@@ -205,19 +222,13 @@ class AnonymousChatBot:
                 get_text("welcome_back", lang),
                 lang,
             )
-    
-    async def check_subscriptions(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-        """Check if user has subscribed to required channels"""
-        user_id = update.effective_user.id
-        lang = context.user_data.get('language', 'en')
-        
-        # Check if already verified
-        user = db.get_user(user_id)
-        if user and user['subscribed']:
-            return True
-        
+
+    async def _get_missing_required_channels(self, user_id: int, context: ContextTypes.DEFAULT_TYPE):
+        """Return required channels the user is not currently subscribed to."""
+        if not REQUIRED_CHANNELS:
+            return []
+
         not_subscribed = []
-        
         for channel in REQUIRED_CHANNELS:
             try:
                 member = await context.bot.get_chat_member(channel, user_id)
@@ -226,26 +237,79 @@ class AnonymousChatBot:
             except Exception as e:
                 logger.error(f"Error checking subscription for {channel}: {e}")
                 not_subscribed.append(channel)
-        
-        if not_subscribed:
-            channel_links = '\n'.join([f"• {ch}" for ch in REQUIRED_CHANNELS])
 
-            keyboard = [[
-                InlineKeyboardButton(get_text("subscription_btn", lang), callback_data="verify_subscription")
-            ]]
-            
-            # Use effective_chat.send_message to work with both messages and callback queries
-            await update.effective_chat.send_message(
-                get_text("subscription_missing", lang, channel_links=channel_links),
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-            return False
-        
-        # Mark as subscribed
+        return not_subscribed
+
+    async def _send_subscription_required_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE, lang: str, channels=None):
+        """Send a subscription prompt that works for both messages and callbacks."""
+        channel_links = '\n'.join([f"• {ch}" for ch in (channels or REQUIRED_CHANNELS)])
+        keyboard = [[
+            InlineKeyboardButton(get_text("subscription_btn", lang), callback_data="verify_subscription")
+        ]]
+
+        await update.effective_chat.send_message(
+            get_text("subscription_missing", lang, channel_links=channel_links),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    async def _disconnect_user_for_subscription_loss(self, user_id: int, context: ContextTypes.DEFAULT_TYPE):
+        """Force user out of queue/chat after they unsubscribe from required channels."""
+        state_info = db.get_user_state(user_id)
+        if not state_info:
+            return
+
+        if state_info['state'] == 'SEARCHING':
+            db.atomic_leave_queue(user_id)
+            return
+
+        if state_info['state'] in ('CHATTING', 'RATING'):
+            success, partner_id, _ = db.atomic_end_chat(user_id)
+            if success and partner_id:
+                partner_lang = self._get_user_lang(partner_id)
+                try:
+                    await context.bot.send_message(
+                        partner_id,
+                        get_text("partner_left", partner_lang)
+                    )
+                except (Forbidden, BadRequest) as e:
+                    logger.warning(f"[SUBSCRIPTION] Could not notify partner {partner_id}: {e}")
+
+                try:
+                    await self.show_rating_to_user(context, partner_id, user_id)
+                except (Forbidden, BadRequest) as e:
+                    logger.warning(f"[SUBSCRIPTION] Could not send rating to partner {partner_id}: {e}")
+
+    async def enforce_live_subscription(self, update: Update, context: ContextTypes.DEFAULT_TYPE, disconnect_active: bool = True) -> bool:
+        """Re-check required channels on every important interaction."""
+        user_id = update.effective_user.id
+        if user_id in ADMIN_IDS:
+            return True
+
+        user = db.get_user(user_id)
+        lang = (
+            (user.get('language') if user else None)
+            or context.user_data.get('language')
+            or self._detect_language(update)
+        )
+
+        not_subscribed = await self._get_missing_required_channels(user_id, context)
+        if not not_subscribed:
+            if user:
+                db.update_user_subscription(user_id, True)
+            return True
+
         if user:
-            db.update_user_subscription(user_id, True)
-        
-        return True
+            db.update_user_subscription(user_id, False)
+
+        if disconnect_active:
+            await self._disconnect_user_for_subscription_loss(user_id, context)
+
+        await self._send_subscription_required_message(update, context, lang, not_subscribed)
+        return False
+    
+    async def check_subscriptions(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+        """Check if user has subscribed to required channels"""
+        return await self.enforce_live_subscription(update, context, disconnect_active=True)
     
     async def verify_subscription_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle subscription verification button"""
@@ -253,20 +317,23 @@ class AnonymousChatBot:
         await query.answer()
         
         user_id = query.from_user.id
-        lang = context.user_data.get('language', 'en')
-        not_subscribed = []
-        
-        for channel in REQUIRED_CHANNELS:
-            try:
-                member = await context.bot.get_chat_member(channel, user_id)
-                if member.status in ['left', 'kicked']:
-                    not_subscribed.append(channel)
-            except Exception as e:
-                logger.error(f"Error checking subscription: {e}")
-                not_subscribed.append(channel)
+        user = db.get_user(user_id)
+        lang = (
+            (user.get('language') if user else None)
+            or context.user_data.get('language')
+            or self._detect_language(update)
+        )
+        not_subscribed = await self._get_missing_required_channels(user_id, context)
         
         if not_subscribed:
-            await query.edit_message_text(get_text("subscription_not_all", lang))
+            channel_links = '\n'.join([f"• {ch}" for ch in not_subscribed])
+            keyboard = [[
+                InlineKeyboardButton(get_text("subscription_btn", lang), callback_data="verify_subscription")
+            ]]
+            await query.edit_message_text(
+                get_text("subscription_not_all_with_channels", lang, channel_links=channel_links),
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         else:
             db.update_user_subscription(user_id, True)
 
@@ -343,6 +410,9 @@ class AnonymousChatBot:
         user_id = update.effective_user.id
         msg = update.effective_message
         lang = self._get_user_lang(user_id)
+
+        if not await self.enforce_live_subscription(update, context):
+            return
         
         # Check if user is registered
         user = db.get_user(user_id)
@@ -379,8 +449,8 @@ class AnonymousChatBot:
             if 'vip_target_gender' not in context.user_data:
                 keyboard = [
                     [
-                        InlineKeyboardButton("� Girl", callback_data="vip_search_female"),
-                        InlineKeyboardButton("� Boy", callback_data="vip_search_male"),
+                            InlineKeyboardButton("👧 Girl", callback_data="vip_search_female"),
+                            InlineKeyboardButton("👦 Boy", callback_data="vip_search_male"),
                     ],
                     [InlineKeyboardButton("🎲 Random", callback_data="vip_search_any")],
                 ]
@@ -406,20 +476,25 @@ class AnonymousChatBot:
             # Notify both users
             user_is_vip = user['is_vip']
             partner_is_vip = partner['is_vip']
+            partner_lang = self._get_user_lang(partner_id)
             
             user_message = get_text("match_found", lang)
-            partner_message = get_text("match_found", self._get_user_lang(partner_id))
+            partner_message = get_text("match_found", partner_lang)
             
             # Add VIP info
             if user_is_vip:
                 gender_emoji = "♂️" if partner['gender'] == 'male' else "♀️" if partner['gender'] == 'female' else "⚧️"
                 user_message += f"\n\n👑 VIP Info: {gender_emoji} {partner['gender'].capitalize()}, {partner['age']} years old"
                 user_message += "\n" + self._format_partner_ratings_line(partner_id, lang)
+            else:
+                user_message += get_text("vip_match_upsell", lang)
             
             if partner_is_vip:
                 gender_emoji = "♂️" if user['gender'] == 'male' else "♀️" if user['gender'] == 'female' else "⚧️"
                 partner_message += f"\n\n👑 VIP Info: {gender_emoji} {user['gender'].capitalize()}, {user['age']} years old"
-                partner_message += "\n" + self._format_partner_ratings_line(user_id, self._get_user_lang(partner_id))
+                partner_message += "\n" + self._format_partner_ratings_line(user_id, partner_lang)
+            else:
+                partner_message += get_text("vip_match_upsell", partner_lang)
             
             await msg.reply_text(user_message)
             await context.bot.send_message(partner_id, partner_message)
@@ -445,6 +520,9 @@ class AnonymousChatBot:
         """VIP-only: handle gender choice before searching."""
         query = update.callback_query
         await query.answer()
+
+        if not await self.enforce_live_subscription(update, context):
+            return
         
         user_id = update.effective_user.id
         lang = self._get_user_lang(user_id)
@@ -480,6 +558,9 @@ class AnonymousChatBot:
         user_id = update.effective_user.id
         lang = self._get_user_lang(user_id)
 
+        if not await self.enforce_live_subscription(update, context):
+            return
+
         # Clear VIP preference for next search
         if 'vip_target_gender' in context.user_data:
             del context.user_data['vip_target_gender']
@@ -508,17 +589,24 @@ class AnonymousChatBot:
             # End chat
             success, partner_id, message = db.atomic_end_chat(user_id)
             if success and partner_id:
-                # Show rating to both users
+                # Show rating to the user who stopped
                 await self.show_rating(update, context, user_id, partner_id)
-                await self.show_rating_to_user(context, partner_id, user_id)
-                
-                # Notify partner
+
                 partner_lang = self._get_user_lang(partner_id)
-                await context.bot.send_message(
-                    partner_id,
-                    get_text("partner_left", partner_lang)
-                )
-                
+                # Send "partner left" first, then rating — each wrapped so one failure
+                # doesn't block the other (e.g. partner blocked the bot)
+                try:
+                    await context.bot.send_message(
+                        partner_id,
+                        get_text("partner_left", partner_lang)
+                    )
+                except (Forbidden, BadRequest) as e:
+                    logger.warning(f"[STOP] Could not send partner_left to {partner_id}: {e}")
+                try:
+                    await self.show_rating_to_user(context, partner_id, user_id)
+                except (Forbidden, BadRequest) as e:
+                    logger.warning(f"[STOP] Could not send rating to {partner_id}: {e}")
+
                 logger.info(f"[ATOMIC] User {user_id} ended chat with {partner_id}")
             else:
                 await update.message.reply_text(f"❗️ {message}")
@@ -532,6 +620,9 @@ class AnonymousChatBot:
         """Share your Telegram @username / t.me link with your current partner (consent-based)."""
         user_id = update.effective_user.id
         lang = self._get_user_lang(user_id)
+
+        if not await self.enforce_live_subscription(update, context):
+            return
 
         partner_id = self._get_partner_id(user_id)
         if not partner_id:
@@ -561,6 +652,9 @@ class AnonymousChatBot:
         """Handle sharelink confirmation/cancel buttons."""
         query = update.callback_query
         await query.answer()
+
+        if not await self.enforce_live_subscription(update, context):
+            return
 
         user_id = update.effective_user.id
         lang = self._get_user_lang(user_id)
@@ -601,6 +695,9 @@ class AnonymousChatBot:
         user_id = update.effective_user.id
         lang = self._get_user_lang(user_id)
         msg = update.effective_message
+
+        if not await self.enforce_live_subscription(update, context):
+            return
 
         # Clear VIP preference
         if 'vip_target_gender' in context.user_data:
@@ -647,25 +744,46 @@ class AnonymousChatBot:
             logger.error(f"[ATOMIC /next] Failed for {user_id}: {data.get('message')}")
             return
         
+        # Notify old partner that the chat was ended (applies to both 'matched' and 'searching')
+        old_partner_id = data.get('old_partner_id')
+        if old_partner_id:
+            old_partner_lang = self._get_user_lang(old_partner_id)
+            try:
+                await context.bot.send_message(
+                    old_partner_id,
+                    get_text("partner_left", old_partner_lang)
+                )
+            except (Forbidden, BadRequest) as e:
+                logger.warning(f"[NEXT] Could not send partner_left to old partner {old_partner_id}: {e}")
+            try:
+                await self.show_rating_to_user(context, old_partner_id, user_id)
+            except (Forbidden, BadRequest) as e:
+                logger.warning(f"[NEXT] Could not send rating to old partner {old_partner_id}: {e}")
+
         if action == 'matched':
             # Matched immediately!
             partner_info = data['partner']
             partner_id = partner_info['user_id']
+            partner_lang = self._get_user_lang(partner_id)
             
             # Notify both users
             user_message = get_text("match_found", lang)
-            partner_message = get_text("match_found", self._get_user_lang(partner_id))
+            partner_message = get_text("match_found", partner_lang)
             
             # Add VIP info
             if user.get('is_vip'):
                 gender_emoji = "♂️" if partner_info['gender'] == 'male' else "♀️" if partner_info['gender'] == 'female' else "⚧️"
                 user_message += f"\n\n👑 VIP Info: {gender_emoji} {partner_info['gender'].capitalize()}, {partner_info['age']} years old"
                 user_message += "\n" + self._format_partner_ratings_line(partner_id, lang)
+            else:
+                user_message += get_text("vip_match_upsell", lang)
             
             if partner_info['is_vip']:
                 gender_emoji = "♂️" if user['gender'] == 'male' else "♀️" if user['gender'] == 'female' else "⚧️"
                 partner_message += f"\n\n👑 VIP Info: {gender_emoji} {user['gender'].capitalize()}, {user['age']} years old"
-                partner_message += "\n" + self._format_partner_ratings_line(user_id, self._get_user_lang(partner_id))
+                partner_message += "\n" + self._format_partner_ratings_line(user_id, partner_lang)
+            else:
+                partner_message += get_text("vip_match_upsell", partner_lang)
             
             await msg.reply_text(user_message)
             await context.bot.send_message(partner_id, partner_message)
@@ -688,6 +806,9 @@ class AnonymousChatBot:
         """VIP-only: handle gender choice for /next command."""
         query = update.callback_query
         await query.answer()
+
+        if not await self.enforce_live_subscription(update, context):
+            return
         
         choice = query.data
         if choice == "vip_next_male":
@@ -742,6 +863,9 @@ class AnonymousChatBot:
         """Handle rating button press"""
         query = update.callback_query
         await query.answer()
+
+        if not await self.enforce_live_subscription(update, context, disconnect_active=False):
+            return
         
         rater_id = query.from_user.id
         parts = query.data.split('_')
@@ -774,6 +898,9 @@ class AnonymousChatBot:
         """Handle regular messages - relay to chat partner"""
         user_id = update.effective_user.id
         lang = self._get_user_lang(user_id)
+
+        if not await self.enforce_live_subscription(update, context):
+            return
 
         # Profile edit: age input
         if context.user_data.get('awaiting_age_edit'):
@@ -836,6 +963,9 @@ class AnonymousChatBot:
         """Relay non-text messages (photos, videos, GIFs, etc.) to chat partner."""
         user_id = update.effective_user.id
 
+        if not await self.enforce_live_subscription(update, context):
+            return
+
         partner_id = self._get_partner_id(user_id)
         if not partner_id:
             await update.effective_message.reply_text(
@@ -875,40 +1005,47 @@ class AnonymousChatBot:
     async def profile(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /profile command"""
         user_id = update.effective_user.id
+        lang = self._get_user_lang(user_id)
+
+        if not await self.enforce_live_subscription(update, context):
+            return
+
         user = db.get_user(user_id)
 
         if not user:
             await update.effective_message.reply_text(
-                "❗️ Please complete registration first by sending /start"
+                get_text("register_first", lang)
             )
             return
 
         gender_emoji = (
             "♂️" if user["gender"] == "male" else "♀️" if user["gender"] == "female" else "⚧️"
         )
-        vip_status = "👑 VIP Member" if user["is_vip"] else "Regular User"
+        gender_label = get_text(f"gender_{user['gender']}", lang).split(" ", 1)[1]
+        vip_status = get_text("vip_member", lang) if user["is_vip"] else get_text("regular_user", lang)
         
         # Add VIP expiration info if user is VIP
         vip_info = vip_status
         if user["is_vip"]:
             days_remaining = db.get_vip_days_remaining(user_id)
             if days_remaining is not None:
-                vip_info = f"👑 VIP Member ({days_remaining} days remaining)"
+                vip_info = get_text("profile_vip_days", lang, days=days_remaining)
 
         ratings = db.get_user_ratings(user_id)
 
-        profile_text = (
-            f"👤 Your Profile\n\n"
-            f"{gender_emoji} Gender: {user['gender'].capitalize()}\n"
-            f"🎂 Age: {user['age']}\n"
-            f"✨ Status: {vip_info}\n\n"
-            f"📊 Ratings Received:\n"
-            f"👍 Good: {ratings['good']}\n"
-            f"👎 Bad: {ratings['bad']}\n"
-            f"⛔ Reports: {ratings['scam']}"
+        profile_text = get_text(
+            "profile_text",
+            lang,
+            gender_emoji=gender_emoji,
+            gender=gender_label,
+            age=user['age'],
+            status=vip_info,
+            good=ratings['good'],
+            bad=ratings['bad'],
+            scam=ratings['scam'],
         )
 
-        keyboard = [[InlineKeyboardButton("✏️ Edit Profile", callback_data="edit_profile")]]
+        keyboard = [[InlineKeyboardButton(get_text("edit_profile_button", lang), callback_data="edit_profile")]]
         await update.effective_message.reply_text(
             profile_text,
             reply_markup=InlineKeyboardMarkup(keyboard),
@@ -918,6 +1055,9 @@ class AnonymousChatBot:
         """Show profile edit menu."""
         query = update.callback_query
         await query.answer()
+
+        if not await self.enforce_live_subscription(update, context):
+            return
 
         user_id = update.effective_user.id
         lang = self._get_user_lang(user_id)
@@ -941,6 +1081,9 @@ class AnonymousChatBot:
         query = update.callback_query
         await query.answer()
 
+        if not await self.enforce_live_subscription(update, context):
+            return
+
         user_id = update.effective_user.id
         lang = self._get_user_lang(user_id)
 
@@ -957,6 +1100,9 @@ class AnonymousChatBot:
         query = update.callback_query
         await query.answer()
 
+        if not await self.enforce_live_subscription(update, context):
+            return
+
         user_id = update.effective_user.id
         lang = self._get_user_lang(user_id)
 
@@ -967,6 +1113,9 @@ class AnonymousChatBot:
         """Go back to profile view from edit menu."""
         query = update.callback_query
         await query.answer()
+
+        if not await self.enforce_live_subscription(update, context):
+            return
 
         user_id = update.effective_user.id
         lang = self._get_user_lang(user_id)
@@ -979,20 +1128,26 @@ class AnonymousChatBot:
         gender_emoji = (
             "♂️" if user["gender"] == "male" else "♀️" if user["gender"] == "female" else "⚧️"
         )
-        vip_status = "👑 VIP Member" if user["is_vip"] else "Regular User"
+        gender_label = get_text(f"gender_{user['gender']}", lang).split(" ", 1)[1]
+        vip_status = get_text("vip_member", lang) if user["is_vip"] else get_text("regular_user", lang)
+        if user["is_vip"]:
+            days_remaining = db.get_vip_days_remaining(user_id)
+            if days_remaining is not None:
+                vip_status = get_text("profile_vip_days", lang, days=days_remaining)
         ratings = db.get_user_ratings(user_id)
-        profile_text = (
-            f"👤 Your Profile\n\n"
-            f"{gender_emoji} Gender: {user['gender'].capitalize()}\n"
-            f"🎂 Age: {user['age']}\n"
-            f"✨ Status: {vip_status}\n\n"
-            f"📊 Ratings Received:\n"
-            f"👍 Good: {ratings['good']}\n"
-            f"👎 Bad: {ratings['bad']}\n"
-            f"⛔ Reports: {ratings['scam']}"
+        profile_text = get_text(
+            "profile_text",
+            lang,
+            gender_emoji=gender_emoji,
+            gender=gender_label,
+            age=user['age'],
+            status=vip_status,
+            good=ratings['good'],
+            bad=ratings['bad'],
+            scam=ratings['scam'],
         )
 
-        keyboard = [[InlineKeyboardButton("✏️ Edit Profile", callback_data="edit_profile")]]
+        keyboard = [[InlineKeyboardButton(get_text("edit_profile_button", lang), callback_data="edit_profile")]]
         await query.edit_message_text(
             profile_text,
             reply_markup=InlineKeyboardMarkup(keyboard),
@@ -1001,6 +1156,11 @@ class AnonymousChatBot:
     async def vip_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /vip command"""
         user_id = update.effective_user.id
+        lang = self._get_user_lang(user_id)
+
+        if not await self.enforce_live_subscription(update, context):
+            return
+
         user = db.get_user(user_id)
         
         if user and user['is_vip']:
@@ -1008,80 +1168,69 @@ class AnonymousChatBot:
             if days_remaining is not None:
                 if days_remaining > 0:
                     # Active VIP with days remaining
-                    keyboard = [
-                        [InlineKeyboardButton(f"🔄 Renew VIP for {VIP_PRICE_STARS} Stars", callback_data="buy_vip")]
-                    ]
+                    keyboard = self._vip_plan_keyboard(lang)
                     await update.message.reply_text(
-                        f"👑 You are a VIP Member!\n\n"
-                        f"⏰ Your VIP expires in {days_remaining} days\n\n"
-                        "VIP Benefits:\n"
-                        "• Choose partner gender\n"
-                        "• See partner's age and gender\n"
-                        "• Priority matching\n"
-                        "• Special VIP badge\n\n"
-                        f"💡 You can renew your subscription anytime!",
-                        reply_markup=InlineKeyboardMarkup(keyboard)
+                        get_text("vip_active_text", lang, days=days_remaining),
+                        reply_markup=keyboard
                     )
                 else:
                     # VIP expired
-                    keyboard = [
-                        [InlineKeyboardButton(f"⭐ Buy VIP for {VIP_PRICE_STARS} Stars", callback_data="buy_vip")]
-                    ]
+                    keyboard = self._vip_plan_keyboard(lang)
                     await update.message.reply_text(
-                        "⚠️ Your VIP subscription has expired!\n\n"
-                        "Renew now to get back:\n"
-                        "• Choose partner gender\n"
-                        "• See partner's age and gender\n"
-                        "• Priority matching\n"
-                        "• Special VIP badge\n\n"
-                        f"💰 Price: {VIP_PRICE_STARS} Telegram Stars (monthly)",
-                        reply_markup=InlineKeyboardMarkup(keyboard)
+                        get_text("vip_expired_text", lang, plans=self._format_vip_plan_lines(lang)),
+                        reply_markup=keyboard
                     )
             else:
                 # Old VIP user without expiration (grandfathered)
                 await update.message.reply_text(
-                    "👑 You have lifetime VIP status!\n\n"
-                    "VIP Benefits:\n"
-                    "• Choose partner gender\n"
-                    "• See partner's age and gender\n"
-                    "• Priority matching\n"
-                    "• Special VIP badge"
+                    get_text("vip_lifetime_text", lang)
                 )
             return
         
-        keyboard = [
-            [InlineKeyboardButton(f"⭐ Buy VIP for {VIP_PRICE_STARS} Stars", callback_data="buy_vip")]
-        ]
+        keyboard = self._vip_plan_keyboard(lang)
         
         await update.message.reply_text(
-            "👑 VIP Membership Benefits:\n\n"
-            "✅ Choose your partner's gender before matching\n"
-            "✅ See your partner's age and gender during chats\n"
-            "✅ Priority matching in the queue\n"
-            "✅ Special VIP badge in your profile\n"
-            "✅ Support the bot development\n\n"
-            f"💰 Price: {VIP_PRICE_STARS} Telegram Stars (monthly)\n"
-            "🔄 Automatically renews every 30 days\n\n"
-            "Upgrade now to enhance your anonymous chat experience!",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            get_text("vip_info_text", lang, plans=self._format_vip_plan_lines(lang)),
+            reply_markup=keyboard
         )
     
     async def buy_vip_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle VIP purchase button"""
         query = update.callback_query
         await query.answer()
+
+        if not await self.enforce_live_subscription(update, context):
+            return
         
         user_id = query.from_user.id
+        lang = self._get_user_lang(user_id)
+        parts = query.data.split('_')
+
+        if len(parts) < 3 or not parts[2].isdigit():
+            await query.message.reply_text(
+                get_text("vip_choose_plan", lang),
+                reply_markup=self._vip_plan_keyboard(lang)
+            )
+            return
+
+        vip_days = int(parts[2])
+        vip_price = VIP_PRICES.get(vip_days)
+        if vip_price is None:
+            await query.message.reply_text(
+                get_text("vip_choose_plan", lang),
+                reply_markup=self._vip_plan_keyboard(lang)
+            )
+            return
         
         # Send invoice
         await context.bot.send_invoice(
             chat_id=user_id,
-            title="VIP Membership",
-            description="Get VIP status with exclusive benefits!",
-            payload=f"vip_{user_id}",
+            title=get_text("vip_invoice_title", lang, days=vip_days),
+            description=get_text("vip_invoice_description", lang, days=vip_days),
+            payload=f"vip_{user_id}_{vip_days}",
             provider_token="",  # Empty for Telegram Stars
             currency="XTR",
-            prices=[LabeledPrice("VIP Membership", VIP_PRICE_STARS)]
+            prices=[LabeledPrice(get_text("vip_invoice_title", lang, days=vip_days), vip_price)]
         )
     
     async def precheckout_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1092,65 +1241,48 @@ class AnonymousChatBot:
     async def successful_payment(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle successful payment"""
         user_id = update.effective_user.id
+        lang = self._get_user_lang(user_id)
+
+        if not await self.enforce_live_subscription(update, context, disconnect_active=False):
+            return
         
-        # Grant VIP status for 30 days
-        db.set_vip_status(user_id, True, days=30)
+        payload = update.message.successful_payment.invoice_payload or ""
+        payload_parts = payload.split('_')
+        vip_days = 30
+        if len(payload_parts) >= 3 and payload_parts[2].isdigit():
+            vip_days = int(payload_parts[2])
+
+        if vip_days not in VIP_PRICES:
+            vip_days = 30
+
+        db.set_vip_status(user_id, True, days=vip_days)
         
         await update.message.reply_text(
-            "🎉 Congratulations! You are now a VIP member!\n\n"
-            "✨ Your VIP subscription is active for 30 days\n\n"
-            "VIP Benefits:\n"
-            "• Choose your partner's gender\n"
-            "• See partner's age and gender\n"
-            "• Priority matching\n"
-            "• Special VIP badge\n\n"
-            "💡 Use /vip to check your subscription status anytime!"
+            get_text("vip_payment_success", lang, days=vip_days)
         )
     
     async def rules(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /rules command"""
-        rules_text = (
-            "📜 Chat Rules\n\n"
-            "1️⃣ No sharing of links or external contact info\n"
-            "2️⃣ Be respectful - harassment and hate speech are not allowed\n"
-            "3️⃣ No spam, scams, or fraudulent activities\n"
-            "4️⃣ No explicit, sexual, or inappropriate content\n"
-            "5️⃣ No impersonation or misleading information\n"
-            "6️⃣ Use the rating system to report bad behavior\n\n"
-            "⚠️ Violation of these rules may result in:\n"
-            "• Warnings\n"
-            "• Temporary or permanent ban\n"
-            "• Reported to admins\n\n"
-            "Remember: Your chats are anonymous to your matches, "
-            "but admins can trace your Telegram ID if you get reported.\n\n"
-            "Be kind and enjoy chatting! 💬"
-        )
-        
-        await update.message.reply_text(rules_text)
+        if not await self.enforce_live_subscription(update, context):
+            return
+
+        user_id = update.effective_user.id
+        lang = self._get_user_lang(user_id)
+        await update.message.reply_text(get_text("rules_text", lang))
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /help command"""
-        help_text = (
-            "🤖 Anonymous Chat Bot Help\n\n"
-            "Commands:\n"
-            "/start - Start the bot and register\n"
-            "/search - Find a random chat partner\n"
-            "/stop - End current chat\n"
-            "/next - Find next partner\n"
-            "/profile - View/edit your profile\n"
-            "/vip - Learn about VIP membership\n"
-            "/rules - View chat rules\n"
-            "/help - Show this help message\n\n"
-            "How it works:\n"
-            "1️⃣ Register with your gender and age\n"
-            "2️⃣ Use /search to find a random partner\n"
-            "3️⃣ Chat anonymously - your identity is hidden\n"
-            "4️⃣ Rate your partner after each chat\n"
-            "5️⃣ Use /next to find a new partner anytime\n\n"
-            "💡 Tip: Upgrade to VIP to see your partner's info!"
-        )
-        
-        await update.message.reply_text(help_text, reply_markup=self._main_menu_keyboard())
+        if not await self.enforce_live_subscription(update, context):
+            return
+
+        user_id = update.effective_user.id
+        lang = self._get_user_lang(user_id)
+
+        help_text = get_text("help_text", lang)
+        if user_id in ADMIN_IDS:
+            help_text += get_text("help_admin_block", lang)
+
+        await update.message.reply_text(help_text, reply_markup=self._main_menu_keyboard(lang))
     
     async def language_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /language command - let user choose language."""
@@ -1372,33 +1504,121 @@ class AnonymousChatBot:
     async def admin_give_vip(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /givevip command (admin only)"""
         user_id = update.effective_user.id
+        lang = self._get_user_lang(user_id)
         
         if user_id not in ADMIN_IDS:
             return
         
-        if not context.args:
-            await update.message.reply_text(get_text("admin_usage_givevip", "en"))
+        if len(context.args) < 2:
+            await update.message.reply_text(get_text("admin_usage_givevip", lang))
             return
         
         try:
             target_id = self._resolve_target_user_id(context.args[0])
             if target_id is None:
                 await update.message.reply_text(
-                    get_text("admin_unknown_target", "en")
+                    get_text("admin_unknown_target", lang)
                 )
                 return
 
-            db.set_vip_status(target_id, True)
+            days = int(context.args[1])
+            if days <= 0:
+                await update.message.reply_text(get_text("admin_invalid_days", lang))
+                return
+
+            db.set_vip_status(target_id, True, days=days)
             
             await context.bot.send_message(
                 target_id,
-                "🎉 You have been granted VIP status by an admin!"
+                get_text("admin_vip_granted_target", self._get_user_lang(target_id), days=days)
             )
             
-            await update.message.reply_text(f"✅ VIP status granted to user {target_id}")
+            await update.message.reply_text(get_text("admin_vip_granted_done", lang, user_id=target_id, days=days))
             
+        except IndexError:
+            await update.message.reply_text(get_text("admin_usage_givevip", lang))
+        except ValueError:
+            if len(context.args) >= 2 and not context.args[1].lstrip('-').isdigit():
+                await update.message.reply_text(get_text("admin_invalid_days", lang))
+                return
+            await update.message.reply_text(get_text("admin_invalid_target", lang))
+
+    async def admin_take_vip(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /takevip command (admin only)."""
+        user_id = update.effective_user.id
+        lang = self._get_user_lang(user_id)
+
+        if user_id not in ADMIN_IDS:
+            return
+
+        if not context.args:
+            await update.message.reply_text(get_text("admin_usage_takevip", lang))
+            return
+
+        try:
+            target_id = self._resolve_target_user_id(context.args[0])
+            if target_id is None:
+                await update.message.reply_text(get_text("admin_unknown_target", lang))
+                return
+
+            db.set_vip_status(target_id, False)
+
+            try:
+                await context.bot.send_message(
+                    target_id,
+                    get_text("admin_vip_removed_target", self._get_user_lang(target_id))
+                )
+            except Exception as e:
+                logger.warning(f"Failed to notify {target_id} about VIP removal: {e}")
+
+            await update.message.reply_text(get_text("admin_vip_removed_done", lang, user_id=target_id))
+
         except (ValueError, IndexError):
-            await update.message.reply_text(get_text("admin_invalid_target", "en"))
+            await update.message.reply_text(get_text("admin_invalid_target", lang))
+
+    async def admin_vip_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /viplist command (admin only)."""
+        user_id = update.effective_user.id
+        lang = self._get_user_lang(user_id)
+
+        if user_id not in ADMIN_IDS:
+            return
+
+        vip_users = db.get_vip_users()
+        if not vip_users:
+            await update.message.reply_text(get_text("admin_viplist_empty", lang))
+            return
+
+        vip_entries = []
+        for vip_user in vip_users:
+            target_id = vip_user['user_id']
+            username = vip_user.get('username')
+            days_remaining = db.get_vip_days_remaining(target_id)
+
+            if username:
+                user_label = get_text("admin_viplist_user_label", lang, username=username, user_id=target_id)
+            else:
+                user_label = get_text("admin_viplist_user_id_only", lang, user_id=target_id)
+
+            sort_key = days_remaining if days_remaining is not None else 10**9
+            vip_entries.append({
+                'user_label': user_label,
+                'days_remaining': days_remaining,
+                'sort_key': sort_key,
+            })
+
+        vip_entries.sort(key=lambda item: (item['sort_key'], item['user_label'].lower()))
+
+        lines = [get_text("admin_viplist_header", lang, count=len(vip_entries))]
+        for index, vip_entry in enumerate(vip_entries, start=1):
+            days_remaining = vip_entry['days_remaining']
+
+            if days_remaining is None:
+                lines.append(get_text("admin_viplist_line_lifetime", lang, index=index, user_label=vip_entry['user_label']))
+            else:
+                lines.append(get_text("admin_viplist_line_days", lang, index=index, user_label=vip_entry['user_label'], days=days_remaining))
+
+        await update.message.reply_text("\n".join(lines))
     
     async def admin_reports(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /reports command (admin only)"""
@@ -1462,9 +1682,23 @@ def main():
     async def check_vip_expirations(context: ContextTypes.DEFAULT_TYPE):
         """Check and expire VIP subscriptions daily"""
         try:
-            expired_count = db.check_and_expire_vips()
-            if expired_count > 0:
-                logger.info(f"Expired {expired_count} VIP subscriptions")
+            expired_users = db.check_and_expire_vips()
+            if expired_users:
+                logger.info(f"Expired {len(expired_users)} VIP subscriptions")
+
+                for expired_user in expired_users:
+                    expired_user_id = expired_user['user_id']
+                    lang = expired_user.get('language') or 'en'
+                    keyboard = bot._vip_plan_keyboard(lang)
+
+                    try:
+                        await context.bot.send_message(
+                            expired_user_id,
+                            get_text("vip_expired_text", lang, plans=bot._format_vip_plan_lines(lang)),
+                            reply_markup=keyboard,
+                        )
+                    except (Forbidden, BadRequest) as e:
+                        logger.warning(f"Could not send VIP expiration notice to {expired_user_id}: {e}")
         except Exception as e:
             logger.error(f"Error checking VIP expirations: {e}")
     
@@ -1507,6 +1741,8 @@ def main():
     application.add_handler(CommandHandler("unban", bot.admin_unban))
     application.add_handler(CommandHandler("unbanall", bot.admin_unban_all))
     application.add_handler(CommandHandler("givevip", bot.admin_give_vip))
+    application.add_handler(CommandHandler("takevip", bot.admin_take_vip))
+    application.add_handler(CommandHandler("viplist", bot.admin_vip_list))
     application.add_handler(CommandHandler("reports", bot.admin_reports))
     application.add_handler(CommandHandler("broadcast", bot.admin_broadcast))
     
@@ -1522,7 +1758,7 @@ def main():
     application.add_handler(CallbackQueryHandler(bot.vip_search_choice_callback, pattern="^vip_search_"))
     application.add_handler(CallbackQueryHandler(bot.vip_next_choice_callback, pattern="^vip_next_"))
     application.add_handler(CallbackQueryHandler(bot.sharelink_callback, pattern="^sharelink_"))
-    application.add_handler(CallbackQueryHandler(bot.buy_vip_callback, pattern="^buy_vip$"))
+    application.add_handler(CallbackQueryHandler(bot.buy_vip_callback, pattern=r"^buy_vip(?:_\d+)?$"))
     
     # Payment handlers
     application.add_handler(PreCheckoutQueryHandler(bot.precheckout_callback))

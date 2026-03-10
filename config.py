@@ -19,8 +19,12 @@ ADMIN_IDS = [int(id.strip()) for id in os.getenv('ADMIN_IDS', '').split(',') if 
 # Required channels for subscription (comma-separated in .env, e.g., "@channel1,@channel2")
 REQUIRED_CHANNELS = [ch.strip() for ch in os.getenv('REQUIRED_CHANNELS', '').split(',') if ch.strip()]
 
-# VIP Price in Telegram Stars
-VIP_PRICE_STARS = int(os.getenv('VIP_PRICE_STARS', '100'))
+# VIP plans in Telegram Stars
+VIP_PRICES = {
+    7: int(os.getenv('VIP_PRICE_7_DAYS', '100')),
+    30: int(os.getenv('VIP_PRICE_30_DAYS', '250')),
+    365: int(os.getenv('VIP_PRICE_365_DAYS', '1000')),
+}
 
 # Database path
 DATABASE_PATH = os.getenv('DATABASE_PATH', 'chatbot.db')
